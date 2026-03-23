@@ -17,18 +17,7 @@ const nestingDepth = (line) => {
   return match ? Math.floor(match[1].length / 2) : 0;
 };
 
-const hasNestedLoops = (rawLines) => {
-  const loopRx = /\b(for|while|forEach|map|filter|reduce|each)\b/;
-  const loopLines = rawLines
-    .map((l, i) => ({ i, depth: nestingDepth(l), isLoop: loopRx.test(l) }))
-    .filter((x) => x.isLoop);
-  for (let a = 0; a < loopLines.length; a++) {
-    for (let b = a + 1; b < loopLines.length; b++) {
-      if (loopLines[b].depth > loopLines[a].depth) return true;
-    }
-  }
-  return false;
-};
+const hasNestedLoops = (rawLines) => maxLoopDepth(rawLines) >= 2;
 
 const hasLinearScanInLoop = (rawLines) => {
   const loopRx = /\b(for|while|forEach)\b/;
@@ -301,6 +290,17 @@ const RULES = [
   },
 ];
 
+const COMPLEXITY_HIERARCHY = {
+  "O(2ⁿ) worst": 60,
+  "O(n³)": 50,
+  "O(n² log n)": 40,
+  "O(n²)": 30,
+  "O(n² space)": 30,
+  "O(n×m)": 30,
+  "O(n) per check": 10,
+  "O(n)": 10
+};
+
 // ── Run engine ────────────────────────────────────────────────────────────────
 function runAnalysis(code, language) {
   const rawLines = code.split("\n");
@@ -308,10 +308,58 @@ function runAnalysis(code, language) {
   const flags = [];
   const passed = [];
 
+  // --- 1. SINGLE PASS ARCHITECTURE (Fixes O(n³)) ---
+  // We scan the file exactly ONCE to check all loop-related rules.
+  const loopRx = /\b(for|while|forEach)\b/;
+  let inLoop = false;
+  let currentLoopDepth = 0;
+  const triggeredRuleIds = new Set();
+
+  for (const line of lines) {
+    const d = nestingDepth(line);
+    
+    if (loopRx.test(line)) { 
+      inLoop = true; 
+      currentLoopDepth = d; 
+    }
+
+    if (inLoop && d > currentLoopDepth) {
+      if (!triggeredRuleIds.has("linear-scan-in-loop") && /\.(includes|indexOf|find|filter|some|every|search)\s*\(/.test(line)) {
+        triggeredRuleIds.add("linear-scan-in-loop");
+      }
+      if (!triggeredRuleIds.has("alloc-in-loop") && /new\s+(Array|Object|Map|Set|Date|\w+)\s*\(|=\s*\[\]|=\s*\{\}/.test(line)) {
+        triggeredRuleIds.add("alloc-in-loop");
+      }
+      if (!triggeredRuleIds.has("sort-in-loop") && /\.sort\s*\(|sorted\s*\(|Collections\.sort/.test(line)) {
+        triggeredRuleIds.add("sort-in-loop");
+      }
+      if (!triggeredRuleIds.has("async-in-loop") && /\bawait\b/.test(line)) {
+        triggeredRuleIds.add("async-in-loop");
+      }
+    }
+
+    if (inLoop && d <= currentLoopDepth && !loopRx.test(line)) { 
+      inLoop = false; 
+    }
+  }
+
+  // --- 2. EVALUATE RULES ---
   for (const rule of RULES) {
     if (rule.languages !== "*" && !rule.languages.includes(language)) continue;
+    
     let triggered = false;
-    try { triggered = rule.test(lines, code, rawLines); } catch (_) {}
+
+    // Check if our single-pass already caught it
+    if (triggeredRuleIds.has(rule.id)) {
+      triggered = true;
+    } 
+    // Otherwise, run the standard test for non-loop rules
+    else if (!["linear-scan-in-loop", "alloc-in-loop", "sort-in-loop", "async-in-loop"].includes(rule.id)) {
+      try {
+        triggered = rule.test(lines, code, rawLines);
+      } catch (_) {}
+    }
+
     if (triggered) {
       flags.push({ ...rule, message: rule.dynamic ? rule.dynamic(lines) : rule.message, pass: false });
     } else {
@@ -319,19 +367,29 @@ function runAnalysis(code, language) {
     }
   }
 
-  const complexities = flags.filter(f => f.complexity).map(f => f.complexity);
-  const worstComplexity =
-    complexities.find(c => c.includes("³") || c.includes("3")) ||
-    complexities.find(c => c.includes("2ⁿ")) ||
-    complexities.find(c => c.includes("n² log") || c.includes("n²log")) ||
-    complexities.find(c => c.includes("²") || c.includes("n²")) ||
-    (flags.some(f => f.id === "nested-loops") ? "O(n²)" : null) ||
-    "O(n)";
+  // --- 3. CALCULATE COMPLEXITIES (Fixes O(n²) Scans) ---
+  let worstScore = 0;
+  let worstComplexity = "O(n)";
+
+  for (const flag of flags) {
+    if (flag.complexity && COMPLEXITY_HIERARCHY[flag.complexity]) {
+      const score = COMPLEXITY_HIERARCHY[flag.complexity];
+      if (score > worstScore) {
+        worstScore = score;
+        worstComplexity = flag.complexity;
+      }
+    }
+  }
+
+  if (worstScore === 0 && flags.some(f => f.severity === "CRITICAL")) {
+    worstComplexity = "O(n²)";
+  }
 
   const spaceComplexity =
     flags.some(f => f.id === "string-concat-loop") ? "O(n²)" :
     flags.some(f => f.id === "alloc-in-loop") ? "O(n) avoidable" : "O(n)";
 
+  // --- 4. BUILD FINAL RESULT OBJECT ---
   const critCount = flags.filter(f => f.severity === "CRITICAL").length;
   const highCount = flags.filter(f => f.severity === "HIGH").length;
 
@@ -349,7 +407,7 @@ function runAnalysis(code, language) {
     lineCount: rawLines.length,
     language,
   };
-}
+} // <-- End of runAnalysis function
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // GITHUB FETCHER
