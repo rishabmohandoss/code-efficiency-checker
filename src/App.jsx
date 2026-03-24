@@ -696,7 +696,22 @@ function runAnalysis(code, language) {
 function parseGitHubUrl(url) {
   const m = url.match(/github\.com\/([^/]+)\/([^/]+)(?:\/(?:blob|tree)\/([^/]+)\/(.+))?/);
   if (!m) return null;
-  return { owner: m[1], repo: m[2], branch: m[3] || "main", path: m[4] || "" };
+
+  const owner = m[1];
+  const repo = m[2].replace(/\.git$/, ''); // Remove .git suffix if present
+  const branch = m[3] || "main";
+  const path = m[4] || "";
+
+  // Determine if this is a repo URL or file URL
+  const isRepo = !path || (m[3] && m[3] !== 'blob' && !m[4]);
+
+  return {
+    owner,
+    repo,
+    branch,
+    path,
+    isRepo  // true for repo URLs, false for file URLs
+  };
 }
 
 async function fetchGitHubFile(info) {
@@ -734,6 +749,146 @@ async function fetchGitHubFile(info) {
     }
     throw err;
   }
+}
+
+// Fetch repository tree (list of all files)
+async function fetchGitHubRepoTree(info) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    // First get the default branch if not specified
+    let branch = info.branch;
+    if (!branch || branch === 'main') {
+      const repoRes = await fetch(
+        `https://api.github.com/repos/${info.owner}/${info.repo}`,
+        { signal: controller.signal }
+      );
+      if (repoRes.ok) {
+        const repoData = await repoRes.json();
+        branch = repoData.default_branch;
+      } else {
+        branch = 'main'; // fallback
+      }
+    }
+
+    // Get the tree recursively
+    const res = await fetch(
+      `https://api.github.com/repos/${info.owner}/${info.repo}/git/trees/${branch}?recursive=1`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      if (res.status === 404) throw new Error("Repository not found or is private.");
+      if (res.status === 403) throw new Error("API rate limit exceeded. Try again in a few minutes.");
+      throw new Error(`GitHub ${res.status} — cannot fetch repository tree`);
+    }
+
+    const data = await res.json();
+
+    // Filter for code files only (matching supported extensions)
+    const codeExtensions = Object.keys(EXT_LANG);
+    const codeFiles = data.tree
+      .filter(item => {
+        if (item.type !== 'blob') return false;
+
+        // Skip common ignored paths
+        const ignoredPaths = [
+          'node_modules/', '.git/', 'dist/', 'build/', '.next/',
+          'vendor/', '__pycache__/', '.venv/', 'target/', 'out/'
+        ];
+        if (ignoredPaths.some(p => item.path.includes(p))) return false;
+
+        // Check if file has a supported extension
+        const ext = item.path.split('.').pop().toLowerCase();
+        return codeExtensions.includes(ext);
+      })
+      .slice(0, 50); // Limit to 50 files to respect rate limits
+
+    return { files: codeFiles, branch };
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error("Request timed out. GitHub API may be slow or unreachable.");
+    }
+    throw err;
+  }
+}
+
+// Fetch and analyze multiple files from a repository
+async function analyzeGitHubRepository(info, onProgress) {
+  // Get the file tree
+  onProgress?.({ status: 'fetching_tree', message: 'Fetching repository structure...' });
+  const { files, branch } = await fetchGitHubRepoTree(info);
+
+  if (files.length === 0) {
+    throw new Error("No supported code files found in repository.");
+  }
+
+  onProgress?.({
+    status: 'found_files',
+    message: `Found ${files.length} code file${files.length !== 1 ? 's' : ''} to analyze`,
+    total: files.length
+  });
+
+  const results = [];
+  let processed = 0;
+
+  // Fetch and analyze files one by one (to avoid rate limiting)
+  for (const file of files) {
+    try {
+      onProgress?.({
+        status: 'analyzing',
+        message: `Analyzing ${file.path}...`,
+        current: processed + 1,
+        total: files.length,
+        file: file.path
+      });
+
+      // Fetch file content
+      const fileInfo = { ...info, path: file.path, branch };
+      const content = await fetchGitHubFile(fileInfo);
+
+      // Detect language
+      const ext = file.path.split('.').pop().toLowerCase();
+      const language = EXT_LANG[ext] || 'javascript';
+
+      // Analyze
+      const analysis = runAnalysis(content, language);
+
+      results.push({
+        path: file.path,
+        language,
+        analysis,
+        size: file.size
+      });
+
+      processed++;
+
+      // Small delay to avoid rate limiting
+      await new Promise(resolve => setTimeout(resolve, 100));
+    } catch (err) {
+      // Log error but continue with other files
+      results.push({
+        path: file.path,
+        error: err.message,
+        skipped: true
+      });
+      processed++;
+    }
+  }
+
+  onProgress?.({ status: 'complete', message: 'Analysis complete', results });
+
+  return {
+    repoName: `${info.owner}/${info.repo}`,
+    branch,
+    totalFiles: files.length,
+    analyzedFiles: results.filter(r => !r.skipped).length,
+    skippedFiles: results.filter(r => r.skipped).length,
+    results
+  };
 }
 
 const EXT_LANG = { py:"python",js:"javascript",ts:"typescript",java:"java",cpp:"cpp",go:"go",rs:"rust",c:"c",rb:"ruby",swift:"swift" };
@@ -925,16 +1080,42 @@ function TabBtn({ active, onClick, children }) {
 function MethodTab({ active, onClick, label }) {
   return (
     <button onClick={onClick} style={{
-      flex:1, padding:"13px 8px",
-      background: active ? "#13151f" : "transparent",
-      color: active ? "#e2e8f0" : "#334155",
+      flex:1,
+      padding:"16px 8px",
+      background: active
+        ? "rgba(59, 130, 246, 0.1)"
+        : "transparent",
+      color: active
+        ? "rgba(96, 165, 250, 1)"
+        : "rgba(100, 116, 139, 1)",
       border:"none",
-      borderBottom: active ? "2px solid #e2e8f0" : "2px solid transparent",
+      borderBottom: active
+        ? "2px solid rgba(59, 130, 246, 1)"
+        : "2px solid rgba(255, 255, 255, 0.05)",
       cursor:"pointer",
-      fontFamily:"'Fira Code',monospace", fontSize:11,
-      fontWeight:700, letterSpacing:"0.12em",
-      transition:"all 0.15s",
-    }}>{label}</button>
+      fontFamily:"'Inter',sans-serif",
+      fontSize:12,
+      fontWeight:600,
+      letterSpacing:"0.05em",
+      textTransform:"uppercase",
+      position:"relative",
+      overflow:"hidden",
+    }}
+    onMouseEnter={(e) => {
+      if (!active) {
+        e.currentTarget.style.background = "rgba(255, 255, 255, 0.03)";
+        e.currentTarget.style.color = "rgba(148, 163, 184, 1)";
+      }
+    }}
+    onMouseLeave={(e) => {
+      if (!active) {
+        e.currentTarget.style.background = "transparent";
+        e.currentTarget.style.color = "rgba(100, 116, 139, 1)";
+      }
+    }}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -968,6 +1149,8 @@ export default function App() {
   const [result,   setResult]   = useState(null);
   const [error,    setError]    = useState("");
   const [tab,      setTab]      = useState("flags");
+  const [repoResults, setRepoResults] = useState(null); // For repository analysis
+  const [progress, setProgress] = useState(null); // Progress tracking for repo scan
   const fileRef = useRef(null);
 
   const handleFileRead = useCallback((file) => {
@@ -1008,85 +1191,412 @@ export default function App() {
   };
 
   const handleGitHub = async () => {
-    if (!ghUrl.trim()) { setError("Enter a GitHub file URL."); return; }
+    if (!ghUrl.trim()) { setError("Enter a GitHub URL (file or repository)."); return; }
     const info = parseGitHubUrl(ghUrl);
-    if (!info || !info.path) { setError("URL must point to a specific file (blob URL)."); return; }
-    setError(""); setFetching(true);
+    if (!info) { setError("Invalid GitHub URL format."); return; }
+
+    setError("");
+    setFetching(true);
+    setProgress(null);
+    setRepoResults(null);
+
     try {
-      const fetched = await fetchGitHubFile(info);
-      const ext = info.path.split(".").pop().toLowerCase();
-      const detectedLang = EXT_LANG[ext] || "javascript";
-      setLang(detectedLang);
-      setCode(fetched);
-      setFileName(info.path.split("/").pop());
-      setResult(runAnalysis(fetched, detectedLang));
-      setTab("flags");
+      if (info.isRepo) {
+        // Repository analysis mode
+        setProgress({ status: 'starting', message: 'Initializing repository analysis...' });
+
+        const results = await analyzeGitHubRepository(info, (progressUpdate) => {
+          setProgress(progressUpdate);
+        });
+
+        setRepoResults(results);
+        setTab("repo-summary");
+      } else {
+        // Single file mode (existing functionality)
+        if (!info.path) {
+          setError("URL must point to a specific file or repository.");
+          return;
+        }
+
+        const fetched = await fetchGitHubFile(info);
+        const ext = info.path.split(".").pop().toLowerCase();
+        const detectedLang = EXT_LANG[ext] || "javascript";
+        setLang(detectedLang);
+        setCode(fetched);
+        setFileName(info.path.split("/").pop());
+        setResult(runAnalysis(fetched, detectedLang));
+        setTab("flags");
+      }
     } catch(e) {
       setError(`GitHub error: ${e.message}`);
+      setProgress(null);
     } finally {
       setFetching(false);
     }
   };
 
-  const reset = () => { setResult(null); setCode(""); setGhUrl(""); setFileName(""); setError(""); };
+  const reset = () => {
+    setResult(null);
+    setRepoResults(null);
+    setProgress(null);
+    setCode("");
+    setGhUrl("");
+    setFileName("");
+    setError("");
+  };
+
+  // Helper to aggregate repository stats
+  const aggregateRepoStats = (repoResults) => {
+    if (!repoResults) return null;
+
+    const analyzed = repoResults.results.filter(r => !r.skipped);
+    let totalFlags = 0;
+    let criticalCount = 0;
+    let highCount = 0;
+    let mediumCount = 0;
+    let lowCount = 0;
+
+    analyzed.forEach(file => {
+      if (file.analysis) {
+        totalFlags += file.analysis.flags.length;
+        criticalCount += file.analysis.critCount;
+        highCount += file.analysis.highCount;
+        mediumCount += file.analysis.medCount;
+        lowCount += file.analysis.lowCount;
+      }
+    });
+
+    const filesWithIssues = analyzed.filter(f => f.analysis && f.analysis.flags.length > 0).length;
+
+    return {
+      totalFiles: repoResults.analyzedFiles,
+      filesWithIssues,
+      filesClean: repoResults.analyzedFiles - filesWithIssues,
+      totalFlags,
+      criticalCount,
+      highCount,
+      mediumCount,
+      lowCount
+    };
+  };
 
   return (
-    <div style={{ minHeight:"100vh", background:"#0a0a12", color:"#e2e8f0" }}>
+    <div style={{ minHeight:"100vh", background:"#000000", color:"#e2e8f0", overflow:"hidden" }}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&family=Syne:wght@700;800;900&display=swap');
-        *{box-sizing:border-box;margin:0;padding:0;}
-        body{background:#0a0a12;}
-        ::-webkit-scrollbar{width:5px;height:5px;}
-        ::-webkit-scrollbar-track{background:transparent;}
-        ::-webkit-scrollbar-thumb{background:#1e2030;border-radius:3px;}
-        textarea,input,select{outline:none;}
-        @keyframes slide-in{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
-        .fade-in{animation:slide-in 0.28s ease both;}
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+        * { box-sizing:border-box; margin:0; padding:0; }
+
+        body {
+          background:#000000;
+          overflow-x:hidden;
+        }
+
+        ::-webkit-scrollbar { width:8px; height:8px; }
+        ::-webkit-scrollbar-track { background:transparent; }
+        ::-webkit-scrollbar-thumb {
+          background:rgba(255,255,255,0.1);
+          border-radius:10px;
+          transition:background 0.3s ease;
+        }
+        ::-webkit-scrollbar-thumb:hover { background:rgba(255,255,255,0.2); }
+
+        textarea, input, select { outline:none; }
+
+        /* Smooth Animations */
+        @keyframes fade-up {
+          from {
+            opacity:0;
+            transform:translateY(40px);
+          }
+          to {
+            opacity:1;
+            transform:translateY(0);
+          }
+        }
+
+        @keyframes float {
+          0%, 100% { transform:translateY(0px) rotate(0deg); }
+          50% { transform:translateY(-20px) rotate(5deg); }
+        }
+
+        @keyframes mesh-1 {
+          0%, 100% { transform:translate(0%, 0%) rotate(0deg); }
+          33% { transform:translate(5%, -5%) rotate(120deg); }
+          66% { transform:translate(-5%, 5%) rotate(240deg); }
+        }
+
+        @keyframes mesh-2 {
+          0%, 100% { transform:translate(0%, 0%) rotate(0deg); }
+          33% { transform:translate(-5%, 5%) rotate(-120deg); }
+          66% { transform:translate(5%, -5%) rotate(-240deg); }
+        }
+
+        @keyframes mesh-3 {
+          0%, 100% { transform:translate(0%, 0%) scale(1); }
+          50% { transform:translate(3%, 3%) scale(1.1); }
+        }
+
+        @keyframes pulse-glow {
+          0%, 100% { opacity:0.5; transform:scale(1); }
+          50% { opacity:0.8; transform:scale(1.05); }
+        }
+
+        @keyframes scan-line {
+          0% { transform:translateY(-100%); }
+          100% { transform:translateY(100vh); }
+        }
+
+        .fade-in {
+          animation:fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        .fade-in-delay-1 { animation-delay:0.1s; }
+        .fade-in-delay-2 { animation-delay:0.2s; }
+        .fade-in-delay-3 { animation-delay:0.3s; }
+
+        .float { animation:float 6s ease-in-out infinite; }
+
+        /* Glassmorphism */
+        .glass {
+          background:rgba(255, 255, 255, 0.03);
+          backdrop-filter:blur(20px) saturate(180%);
+          border:1px solid rgba(255, 255, 255, 0.08);
+          box-shadow:
+            0 8px 32px 0 rgba(0, 0, 0, 0.37),
+            inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+        }
+
+        .glass-hover {
+          transition:all 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .glass-hover:hover {
+          background:rgba(255, 255, 255, 0.06);
+          border-color:rgba(255, 255, 255, 0.15);
+          transform:translateY(-2px);
+          box-shadow:
+            0 16px 48px 0 rgba(0, 0, 0, 0.5),
+            inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+        }
+
+        /* Smooth transitions */
+        button, input, textarea, select {
+          transition:all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+        }
       `}</style>
 
-      {/* Grid bg */}
+      {/* Animated Mesh Gradient Background */}
       <div style={{
-        position:"fixed", inset:0, pointerEvents:"none", zIndex:0,
-        backgroundImage:"linear-gradient(#ffffff03 1px,transparent 1px),linear-gradient(90deg,#ffffff03 1px,transparent 1px)",
-        backgroundSize:"48px 48px",
-      }}/>
+        position:"fixed",
+        inset:0,
+        zIndex:0,
+        overflow:"hidden",
+      }}>
+        {/* Base gradient */}
+        <div style={{
+          position:"absolute",
+          inset:0,
+          background:"radial-gradient(circle at 50% 50%, rgba(17, 24, 39, 0.8) 0%, rgba(0, 0, 0, 1) 100%)",
+        }}/>
 
-      <div style={{ position:"relative", zIndex:1, maxWidth:820, margin:"0 auto", padding:"48px 20px 80px" }}>
+        {/* Animated gradient orbs */}
+        <div style={{
+          position:"absolute",
+          top:"-50%",
+          left:"-20%",
+          width:"100%",
+          height:"100%",
+          background:"radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%)",
+          filter:"blur(60px)",
+          animation:"mesh-1 20s ease-in-out infinite",
+        }}/>
+
+        <div style={{
+          position:"absolute",
+          bottom:"-50%",
+          right:"-20%",
+          width:"80%",
+          height:"80%",
+          background:"radial-gradient(circle, rgba(147, 51, 234, 0.15) 0%, transparent 70%)",
+          filter:"blur(60px)",
+          animation:"mesh-2 25s ease-in-out infinite",
+        }}/>
+
+        <div style={{
+          position:"absolute",
+          top:"30%",
+          right:"10%",
+          width:"60%",
+          height:"60%",
+          background:"radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, transparent 70%)",
+          filter:"blur(80px)",
+          animation:"mesh-3 30s ease-in-out infinite",
+        }}/>
+
+        {/* Subtle grid overlay */}
+        <div style={{
+          position:"absolute",
+          inset:0,
+          backgroundImage:"linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)",
+          backgroundSize:"80px 80px",
+          opacity:0.3,
+        }}/>
+
+        {/* Scan line effect */}
+        <div style={{
+          position:"absolute",
+          width:"100%",
+          height:"2px",
+          background:"linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent)",
+          animation:"scan-line 8s linear infinite",
+          opacity:0.3,
+        }}/>
+      </div>
+
+      {/* Floating geometric shapes */}
+      <div style={{ position:"fixed", inset:0, zIndex:0, pointerEvents:"none", overflow:"hidden" }}>
+        {[...Array(5)].map((_, i) => (
+          <div
+            key={i}
+            className="float"
+            style={{
+              position:"absolute",
+              width:"400px",
+              height:"400px",
+              borderRadius:"30% 70% 70% 30% / 30% 30% 70% 70%",
+              background:`radial-gradient(circle, rgba(${i % 2 === 0 ? '59, 130, 246' : '147, 51, 234'}, 0.05) 0%, transparent 70%)`,
+              filter:"blur(40px)",
+              top:`${Math.random() * 100}%`,
+              left:`${Math.random() * 100}%`,
+              animation:`float ${6 + i * 2}s ease-in-out infinite`,
+              animationDelay:`${i * 0.5}s`,
+            }}
+          />
+        ))}
+      </div>
+
+      <div style={{ position:"relative", zIndex:1, maxWidth:920, margin:"0 auto", padding:"80px 24px 120px" }}>
 
         {/* ── Header ── */}
-        <div style={{ marginBottom:44 }}>
-          <div style={{
-            fontFamily:"'Fira Code',monospace", fontSize:10, color:"#1e2a3a",
-            letterSpacing:"0.4em", marginBottom:10, textTransform:"uppercase",
+        <div className="fade-in" style={{ marginBottom:64, textAlign:"center" }}>
+          {/* Glowing badge */}
+          <div className="fade-in-delay-1" style={{
+            display:"inline-flex",
+            alignItems:"center",
+            gap:8,
+            padding:"8px 20px",
+            marginBottom:24,
+            background:"rgba(59, 130, 246, 0.08)",
+            border:"1px solid rgba(59, 130, 246, 0.2)",
+            borderRadius:50,
+            fontFamily:"'JetBrains Mono',monospace",
+            fontSize:11,
+            fontWeight:600,
+            color:"rgba(96, 165, 250, 1)",
+            letterSpacing:"0.05em",
+            textTransform:"uppercase",
+            boxShadow:"0 0 20px rgba(59, 130, 246, 0.15), inset 0 0 20px rgba(59, 130, 246, 0.05)",
           }}>
-            Local Static Analysis · {RULES.length} Rules · Zero Network Calls
+            <span style={{
+              display:"inline-block",
+              width:6,
+              height:6,
+              borderRadius:"50%",
+              background:"rgba(96, 165, 250, 1)",
+              boxShadow:"0 0 8px rgba(96, 165, 250, 0.8)",
+              animation:"pulse-glow 2s ease-in-out infinite",
+            }}/>
+            {RULES.length} Rules • Zero API Calls • 100% Client-Side
           </div>
-          <h1 style={{
-            fontFamily:"'Syne',sans-serif",
-            fontSize:"clamp(38px,8vw,72px)",
-            fontWeight:900, lineHeight:.9,
-            letterSpacing:"-0.03em",
-            color:"#f1f5f9", marginBottom:14,
+
+          <h1 className="fade-in-delay-2" style={{
+            fontFamily:"'Inter',sans-serif",
+            fontSize:"clamp(42px, 8vw, 84px)",
+            fontWeight:900,
+            lineHeight:1,
+            letterSpacing:"-0.04em",
+            marginBottom:24,
+            background:"linear-gradient(135deg, #ffffff 0%, rgba(255,255,255,0.6) 100%)",
+            WebkitBackgroundClip:"text",
+            WebkitTextFillColor:"transparent",
+            backgroundClip:"text",
+            textShadow:"0 0 80px rgba(59, 130, 246, 0.3)",
           }}>
-            CODE<br/>
-            <span style={{ WebkitTextStroke:"1px #334155", color:"transparent" }}>EFFICIENCY</span><br/>
-            CHECKER
+            Code Efficiency<br/>
+            <span style={{
+              background:"linear-gradient(135deg, rgba(96, 165, 250, 1) 0%, rgba(147, 51, 234, 1) 100%)",
+              WebkitBackgroundClip:"text",
+              WebkitTextFillColor:"transparent",
+              backgroundClip:"text",
+            }}>Analyzer</span>
           </h1>
-          <p style={{
-            fontFamily:"'Fira Code',monospace", fontSize:12, color:"#334155",
-            lineHeight:1.75, maxWidth:440,
+
+          <p className="fade-in-delay-3" style={{
+            fontFamily:"'Inter',sans-serif",
+            fontSize:16,
+            fontWeight:400,
+            color:"rgba(148, 163, 184, 1)",
+            lineHeight:1.8,
+            maxWidth:560,
+            margin:"0 auto 32px",
+            letterSpacing:"0.01em",
           }}>
-            Pattern-matches against {RULES.length} algorithmic rules.
-            Returns pass/fail per check with Big O inference.
-            No API. No backend. Runs entirely in your browser.
+            AI-powered pattern matching against <strong style={{color:"rgba(226, 232, 240, 1)"}}>{RULES.length} algorithmic rules</strong>.
+            Detects performance anti-patterns, AI slop, and code quality issues instantly.
           </p>
+
+          {/* Stats row */}
+          <div className="fade-in-delay-3" style={{
+            display:"flex",
+            gap:32,
+            justifyContent:"center",
+            flexWrap:"wrap",
+          }}>
+            {[
+              { label:"Languages", value:"10+" },
+              { label:"Analysis", value:"Real-time" },
+              { label:"Privacy", value:"100%" }
+            ].map((stat, i) => (
+              <div key={i} style={{
+                display:"flex",
+                flexDirection:"column",
+                alignItems:"center",
+                gap:4,
+              }}>
+                <div style={{
+                  fontFamily:"'JetBrains Mono',monospace",
+                  fontSize:24,
+                  fontWeight:700,
+                  background:"linear-gradient(135deg, rgba(96, 165, 250, 1) 0%, rgba(147, 51, 234, 1) 100%)",
+                  WebkitBackgroundClip:"text",
+                  WebkitTextFillColor:"transparent",
+                  backgroundClip:"text",
+                }}>
+                  {stat.value}
+                </div>
+                <div style={{
+                  fontFamily:"'Inter',sans-serif",
+                  fontSize:11,
+                  fontWeight:500,
+                  color:"rgba(100, 116, 139, 1)",
+                  letterSpacing:"0.05em",
+                  textTransform:"uppercase",
+                }}>
+                  {stat.label}
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* ── Input panel ── */}
         {!result && (
-          <div className="fade-in" style={{
-            background:"#0d0f1a", border:"1px solid #1e2030",
-            borderRadius:14, overflow:"hidden", marginBottom:20,
+          <div className="fade-in glass" style={{
+            borderRadius:20,
+            overflow:"hidden",
+            marginBottom:32,
+            boxShadow:"0 20px 60px rgba(0, 0, 0, 0.5)",
           }}>
             <div style={{ display:"flex", borderBottom:"1px solid #1e2030" }}>
               <MethodTab active={method==="paste"}  onClick={() => { setMethod("paste");  setError(""); }} label="PASTE CODE" />
@@ -1157,12 +1667,12 @@ export default function App() {
               {method === "github" && (
                 <div style={{ display:"flex", flexDirection:"column", gap:12 }}>
                   <div style={{ fontFamily:"'Fira Code',monospace", fontSize:10, color:"#334155", letterSpacing:"0.15em" }}>
-                    PUBLIC FILE BLOB URL
+                    GITHUB FILE OR REPOSITORY URL
                   </div>
                   <input
                     value={ghUrl}
                     onChange={e => setGhUrl(e.target.value)}
-                    placeholder="https://github.com/owner/repo/blob/main/path/to/file.py"
+                    placeholder="https://github.com/owner/repo  OR  /blob/main/file.py"
                     style={{
                       width:"100%", padding:"13px 16px",
                       background:"#080811", border:"1px solid #1e2030",
@@ -1171,7 +1681,7 @@ export default function App() {
                     }}
                   />
                   <div style={{ fontFamily:"'Fira Code',monospace", fontSize:10, color:"#1e3040" }}>
-                    ⚠ Public repositories only · Paste the blob file URL, not the repo root
+                    💡 Paste a repository URL to analyze all files (max 50), or a file blob URL for single-file analysis
                   </div>
                 </div>
               )}
@@ -1188,19 +1698,67 @@ export default function App() {
               <button
                 onClick={method === "github" ? handleGitHub : handleAnalyze}
                 disabled={fetching}
+                className="glass-hover"
                 style={{
-                  marginTop:18, width:"100%", padding:"14px",
-                  background:"#e2e8f0", color:"#0a0a12",
-                  border:"none", borderRadius:10,
-                  fontFamily:"'Fira Code',monospace", fontSize:13,
-                  fontWeight:700, letterSpacing:"0.12em",
+                  marginTop:24,
+                  width:"100%",
+                  padding:"18px 32px",
+                  background: fetching
+                    ? "rgba(100, 116, 139, 0.3)"
+                    : "linear-gradient(135deg, rgba(59, 130, 246, 0.8) 0%, rgba(147, 51, 234, 0.8) 100%)",
+                  color:"#ffffff",
+                  border:"1px solid rgba(255, 255, 255, 0.1)",
+                  borderRadius:12,
+                  fontFamily:"'Inter',sans-serif",
+                  fontSize:14,
+                  fontWeight:600,
+                  letterSpacing:"0.05em",
+                  textTransform:"uppercase",
                   cursor: fetching ? "not-allowed" : "pointer",
-                  opacity: fetching ? 0.6 : 1,
-                  transition:"opacity 0.2s",
+                  opacity: fetching ? 0.5 : 1,
+                  boxShadow: fetching
+                    ? "none"
+                    : "0 8px 32px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)",
+                  position:"relative",
+                  overflow:"hidden",
+                }}
+                onMouseEnter={(e) => {
+                  if (!fetching) {
+                    e.currentTarget.style.transform = "translateY(-2px)";
+                    e.currentTarget.style.boxShadow = "0 12px 48px rgba(59, 130, 246, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.2)";
+                  }
+                }}
+                onMouseLeave={(e) => {
+                  if (!fetching) {
+                    e.currentTarget.style.transform = "translateY(0)";
+                    e.currentTarget.style.boxShadow = "0 8px 32px rgba(59, 130, 246, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.1)";
+                  }
                 }}
               >
-                {fetching ? "FETCHING..." : "▶ RUN ANALYSIS"}
+                {fetching ? (
+                  <span style={{display:"flex", alignItems:"center", justifyContent:"center", gap:8}}>
+                    <span style={{
+                      display:"inline-block",
+                      width:12,
+                      height:12,
+                      border:"2px solid rgba(255,255,255,0.3)",
+                      borderTopColor:"#ffffff",
+                      borderRadius:"50%",
+                      animation:"spin 0.8s linear infinite",
+                    }}/>
+                    Analyzing...
+                  </span>
+                ) : (
+                  <>▶ Run Analysis</>
+                )}
               </button>
+
+              {/* Add spin animation to styles */}
+              <style>{`
+                @keyframes spin {
+                  to { transform: rotate(360deg); }
+                }
+              `}</style>
             </div>
           </div>
         )}
