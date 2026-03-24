@@ -4,7 +4,8 @@ A client-side static analysis tool that scans code for performance anti-patterns
 
 ## Features
 
-- **18 Pattern-Matching Rules** detecting O(n²), O(n³) complexity issues
+- **25 Pattern-Matching Rules** detecting O(n²), O(n³) complexity issues & AI-generated code anti-patterns
+- **AI Slop Detection** - identifies common issues in vibecoded/LLM-generated code
 - **10 Programming Languages** supported (Python, JavaScript, TypeScript, Java, C++, Go, Rust, C, Ruby, Swift)
 - **Three Input Methods**:
   - Paste code directly
@@ -56,6 +57,7 @@ npm run preview
 - Nested loops
 - Triple-nested loops
 - Linear scans inside loops (.includes, .indexOf, .find)
+- **Empty catch blocks** (error swallowing)
 
 ### High Severity
 - Object/array allocation inside loops
@@ -63,22 +65,51 @@ npm run preview
 - Sort called inside loops
 - Await inside for/while loops (serialization)
 - DOM manipulation inside loops
+- **Missing null/undefined checks** on property access
+- **Unhandled promise rejections**
+- **Infinite loop risks** (while(true) without break)
 
 ### Medium Severity
 - Arrays used as lookup sets
 - String concatenation in loops
+- **Excessive function parameters** (>5)
+- **Callback hell** (deeply nested callbacks)
 
 ### Low Severity
 - console.log inside loops
 - Excessively long functions (>60 lines)
+- **Magic numbers** (hardcoded values without constants)
 
 ### Language-Specific
 - **Python**: Nested list comprehensions, .append() in loops, redundant .keys() iteration
 - **JavaScript/TypeScript**: Specific async and DOM-related patterns
 
+### AI Slop Detection 🤖
+Identifies common anti-patterns in LLM/AI-generated "vibecoded" code:
+
+- **Error Swallowing**: Empty catch blocks that hide failures
+- **Happy Path Bias**: Missing null checks and edge case handling
+- **Defensive Over-Engineering**: Try-catch everywhere without proper handling
+- **Callback Hell**: Nested promises instead of async/await
+- **Parameter Explosion**: Too many function parameters (use config objects)
+- **Infinite Loop Traps**: while(true) without clear exit conditions
+- **Magic Numbers**: Scattered hardcoded values instead of named constants
+
+These patterns indicate code that "looks right" but breaks under real-world conditions.
+
 ## Recent Improvements
 
-### Fixed Issues (Latest Update)
+### Latest Update - AI Slop Detection Added! 🤖
+9. ✅ **AI Slop Detection**: 7 new rules detecting common issues in LLM-generated code
+   - Empty catch blocks
+   - Missing null checks
+   - Unhandled promises
+   - Infinite loop risks
+   - Excessive parameters
+   - Callback hell
+   - Magic numbers
+
+### Fixed Issues (Previous Update)
 1. ✅ **Syntax Error**: Removed stray `cd` text (line 968)
 2. ✅ **Security**: Updated vite to v8.0.2 (fixed 2 moderate vulnerabilities)
 3. ✅ **Comment Stripping**: Improved multi-line comment handling

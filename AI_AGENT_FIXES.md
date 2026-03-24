@@ -634,4 +634,213 @@ git push origin main
 
 ---
 
+## NEW FEATURE: AI SLOP DETECTION 🤖
+
+### WHAT IS AI SLOP?
+
+"AI Slop" or "Vibecoded" refers to code that looks plausible but contains subtle bugs common in LLM-generated code. These patterns include:
+- **Happy path bias**: Code that works for ideal inputs but breaks on edge cases
+- **Defensive over-engineering**: Adding try-catch everywhere without proper error handling
+- **Pattern cargo-culting**: Copying complex patterns where simple solutions suffice
+
+### 7 NEW RULES ADDED (v2.0)
+
+**File**: `src/App.jsx` (added after line 365 in RULES array)
+
+#### 1. Empty Catch Blocks (CRITICAL)
+```javascript
+{
+  id: "empty-catch",
+  severity: "CRITICAL",
+  message: "Empty catch blocks silently swallow errors, making debugging impossible."
+}
+```
+**Detects:**
+```javascript
+// BAD - AI slop
+try {
+  riskyOperation();
+} catch(e) {
+  // Empty - error hidden!
+}
+
+// GOOD
+try {
+  riskyOperation();
+} catch(e) {
+  console.error('Operation failed:', e);
+  throw e;
+}
+```
+
+#### 2. Missing Null Checks (HIGH)
+```javascript
+{
+  id: "missing-null-check",
+  severity: "HIGH",
+  message: "Accessing nested properties without null checks causes runtime errors."
+}
+```
+**Detects:**
+```javascript
+// BAD - AI assumes happy path
+function getUsername(user) {
+  return user.profile.name; // Crashes if profile is null
+}
+
+// GOOD
+function getUsername(user) {
+  return user?.profile?.name ?? 'Unknown';
+}
+```
+
+#### 3. Unhandled Promises (HIGH)
+```javascript
+{
+  id: "unhandled-promise",
+  severity: "HIGH",
+  message: "Unhandled promise rejections crash Node apps and create silent failures."
+}
+```
+**Detects:**
+```javascript
+// BAD
+fetch('/api/data'); // No .catch() or try-catch
+
+// GOOD
+fetch('/api/data')
+  .catch(err => console.error('Fetch failed:', err));
+
+// OR
+try {
+  await fetch('/api/data');
+} catch(err) {
+  console.error('Fetch failed:', err);
+}
+```
+
+#### 4. Infinite Loop Risks (HIGH)
+```javascript
+{
+  id: "infinite-loop-risk",
+  severity: "HIGH",
+  message: "while(true) without break/return freezes applications."
+}
+```
+**Detects:**
+```javascript
+// BAD
+while(true) {
+  doSomething();
+  // No break condition!
+}
+
+// GOOD
+while(condition) {
+  doSomething();
+  if (shouldStop) break;
+}
+```
+
+#### 5. Excessive Parameters (MEDIUM)
+```javascript
+{
+  id: "excessive-parameters",
+  severity: "MEDIUM",
+  message: "Functions with >5 parameters are hard to maintain and test."
+}
+```
+**Detects:**
+```javascript
+// BAD - Parameter explosion
+function createUser(name, email, age, address, phone, country, zip) {
+  // ...
+}
+
+// GOOD - Use config object
+function createUser(config) {
+  const { name, email, age, address, phone, country, zip } = config;
+  // ...
+}
+```
+
+#### 6. Callback Hell (MEDIUM)
+```javascript
+{
+  id: "callback-hell",
+  severity: "MEDIUM",
+  message: "Nested callbacks >3 levels deep create unreadable code."
+}
+```
+**Detects:**
+```javascript
+// BAD - AI generates sequential callbacks
+fetchUser(id, (user) => {
+  fetchPosts(user.id, (posts) => {
+    fetchComments(posts[0].id, (comments) => {
+      // Nested too deep!
+    });
+  });
+});
+
+// GOOD - Use async/await
+const user = await fetchUser(id);
+const posts = await fetchPosts(user.id);
+const comments = await fetchComments(posts[0].id);
+```
+
+#### 7. Magic Numbers (LOW)
+```javascript
+{
+  id: "magic-numbers",
+  severity: "LOW",
+  message: "Hardcoded values scattered throughout code make it hard to maintain."
+}
+```
+**Detects:**
+```javascript
+// BAD
+if (retries > 3) return;
+setTimeout(callback, 5000);
+
+// GOOD
+const MAX_RETRIES = 3;
+const TIMEOUT_MS = 5000;
+if (retries > MAX_RETRIES) return;
+setTimeout(callback, TIMEOUT_MS);
+```
+
+---
+
+### IMPACT
+
+**Rules**: 18 → 25 (+7 AI slop detection rules)
+**Coverage**: Now detects both algorithmic inefficiencies AND code quality issues
+**Use Case**: Perfect for reviewing AI-generated code before merging
+
+### TESTING AI SLOP DETECTION
+
+Test with this sample:
+```javascript
+// AI slop example - should trigger multiple flags
+async function processUsers() {
+  const users = await fetch('/api/users');
+
+  while(true) {
+    try {
+      const data = users.data.items.map(u => u.name);
+      console.log(data);
+    } catch(e) {}
+  }
+}
+```
+
+**Expected Flags:**
+- ✅ Empty catch block (CRITICAL)
+- ✅ Missing null check (users.data might be undefined)
+- ✅ Infinite loop risk (while(true) without break)
+- ✅ Unhandled promise (fetch without error handling)
+
+---
+
 END OF FIX DOCUMENT
