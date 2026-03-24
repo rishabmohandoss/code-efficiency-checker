@@ -9,17 +9,91 @@ const SEVERITY = { CRITICAL: 4, HIGH: 3, MEDIUM: 2, LOW: 1 };
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const cleanLines = (lines) =>
-  lines.map((l) => l.replace(/\/\/.*$|#.*$|\/\*.*?\*\//g, "").trim()).filter(Boolean);
+// Improved comment stripping that handles multi-line comments properly
+const cleanLines = (lines) => {
+  const result = [];
+  let inMultiLineComment = false;
 
-const nestingDepth = (line) => {
-  const match = line.match(/^(\s+)/);
-  return match ? Math.floor(match[1].length / 2) : 0;
+  for (let line of lines) {
+    let cleaned = line;
+
+    // Handle multi-line comments
+    if (inMultiLineComment) {
+      const endIdx = cleaned.indexOf('*/');
+      if (endIdx !== -1) {
+        cleaned = cleaned.substring(endIdx + 2);
+        inMultiLineComment = false;
+      } else {
+        continue; // Skip this line entirely
+      }
+    }
+
+    // Remove /* */ comments (could start multi-line)
+    while (cleaned.indexOf('/*') !== -1) {
+      const startIdx = cleaned.indexOf('/*');
+      const endIdx = cleaned.indexOf('*/', startIdx);
+      if (endIdx !== -1) {
+        cleaned = cleaned.substring(0, startIdx) + cleaned.substring(endIdx + 2);
+      } else {
+        cleaned = cleaned.substring(0, startIdx);
+        inMultiLineComment = true;
+        break;
+      }
+    }
+
+    // Remove single-line comments (// and #)
+    cleaned = cleaned.replace(/\/\/.*$|#.*$/, "").trim();
+
+    if (cleaned) result.push(cleaned);
+  }
+
+  return result;
 };
 
-const hasNestedLoops = (rawLines) => maxLoopDepth(rawLines) >= 2;
+// Detect indentation style from the code
+const detectIndentSize = (lines) => {
+  const indents = [];
+  let prevIndent = 0;
 
-const hasLinearScanInLoop = (rawLines) => {
+  for (const line of lines) {
+    const match = line.match(/^(\s+)/);
+    if (match) {
+      const spaces = match[1];
+      // Check for tabs
+      if (spaces.includes('\t')) return 1; // Tab = 1 unit
+
+      const currentIndent = spaces.length;
+      const diff = Math.abs(currentIndent - prevIndent);
+      if (diff > 0 && diff < 10) { // Reasonable indent size
+        indents.push(diff);
+      }
+      prevIndent = currentIndent;
+    }
+  }
+
+  if (indents.length === 0) return 2; // Default to 2 spaces
+
+  // Find most common indent size
+  const counts = {};
+  indents.forEach(i => counts[i] = (counts[i] || 0) + 1);
+  return parseInt(Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b, 2));
+};
+
+// Calculate nesting depth with auto-detected indentation
+const nestingDepthFactory = (indentSize) => (line) => {
+  const match = line.match(/^(\s+)/);
+  if (!match) return 0;
+
+  const spaces = match[1];
+  if (spaces.includes('\t')) {
+    return spaces.split('\t').length - 1;
+  }
+  return Math.floor(spaces.length / indentSize);
+};
+
+const hasNestedLoops = (rawLines, nestingDepth) => maxLoopDepth(rawLines, nestingDepth) >= 2;
+
+const hasLinearScanInLoop = (rawLines, nestingDepth) => {
   const loopRx = /\b(for|while|forEach)\b/;
   const scanRx = /\.(includes|indexOf|find|filter|some|every|search)\s*\(/;
   let inLoop = false, loopDepth = 0;
@@ -32,7 +106,7 @@ const hasLinearScanInLoop = (rawLines) => {
   return false;
 };
 
-const maxLoopDepth = (rawLines) => {
+const maxLoopDepth = (rawLines, nestingDepth) => {
   const loopRx = /\b(for|while|forEach|map|filter)\b/;
   let max = 0, cur = 0;
   for (const line of rawLines) {
@@ -49,7 +123,7 @@ const RULES = [
     title: "Nested Loop Detected",
     severity: "CRITICAL",
     languages: "*",
-    test: (_l, _c, raw) => hasNestedLoops(raw),
+    test: (_l, _c, raw, nestingDepth) => hasNestedLoops(raw, nestingDepth),
     message: "Nested loops produce O(n²) or worse time complexity. Every element in the outer loop triggers a full inner loop traversal.",
     hint: "Flatten with a hash map/set to achieve O(n) time.",
     complexity: "O(n²)",
@@ -59,7 +133,7 @@ const RULES = [
     title: "Triple-Nested Loop",
     severity: "CRITICAL",
     languages: "*",
-    test: (_l, _c, raw) => maxLoopDepth(raw) >= 3,
+    test: (_l, _c, raw, nestingDepth) => maxLoopDepth(raw, nestingDepth) >= 3,
     message: "Three or more nested loops — O(n³) complexity. Will become unusable at scale.",
     hint: "Redesign with dynamic programming or divide-and-conquer.",
     complexity: "O(n³)",
@@ -69,7 +143,7 @@ const RULES = [
     title: "Linear Scan Inside Loop",
     severity: "CRITICAL",
     languages: "*",
-    test: (_l, _c, raw) => hasLinearScanInLoop(raw),
+    test: (_l, _c, raw, nestingDepth) => hasLinearScanInLoop(raw, nestingDepth),
     message: ".includes()/.indexOf()/.find() inside a loop is O(n) per iteration — O(n²) overall.",
     hint: "Pre-build a Set or Map before the loop for O(1) lookups.",
     complexity: "O(n²)",
@@ -79,7 +153,7 @@ const RULES = [
     title: "Object/Array Allocation Inside Loop",
     severity: "HIGH",
     languages: "*",
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /\b(for|while|forEach)\b/;
       const allocRx = /new\s+(Array|Object|Map|Set|Date|\w+)\s*\(|=\s*\[\]|=\s*\{\}/;
       let inLoop = false, depth = 0;
@@ -118,7 +192,7 @@ const RULES = [
     title: "Sort Called Inside Loop",
     severity: "HIGH",
     languages: "*",
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /\b(for|while|forEach)\b/;
       const sortRx = /\.sort\s*\(|sorted\s*\(|Collections\.sort/;
       let inLoop = false, depth = 0;
@@ -139,7 +213,7 @@ const RULES = [
     title: "Await Inside For/While Loop",
     severity: "HIGH",
     languages: ["javascript", "typescript"],
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /\b(for|while)\b/;
       let inLoop = false, depth = 0;
       for (const l of lines) {
@@ -159,7 +233,7 @@ const RULES = [
     title: "DOM Manipulation Inside Loop",
     severity: "HIGH",
     languages: ["javascript", "typescript"],
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /\b(for|while|forEach)\b/;
       const domRx = /document\.(getElementById|querySelector|createElement|appendChild)|\.innerHTML|\.classList\./;
       let inLoop = false, depth = 0;
@@ -191,7 +265,7 @@ const RULES = [
     title: "String Concatenation in Loop",
     severity: "MEDIUM",
     languages: "*",
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /\b(for|while|forEach)\b/;
       const concatRx = /\w+\s*\+=\s*['"`\w]|str\s*=\s*str\s*\+/;
       let inLoop = false, depth = 0;
@@ -212,7 +286,7 @@ const RULES = [
     title: "console.log Inside Loop",
     severity: "LOW",
     languages: ["javascript", "typescript"],
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /\b(for|while|forEach)\b/;
       let inLoop = false, depth = 0;
       for (const l of lines) {
@@ -253,7 +327,7 @@ const RULES = [
     title: "list.append() in Loop",
     severity: "LOW",
     languages: ["python"],
-    test: (lines) => {
+    test: (lines, _c, _r, nestingDepth) => {
       const loopRx = /^\s*for\s+/;
       let inLoop = false, depth = 0;
       for (const l of lines) {
@@ -308,6 +382,10 @@ function runAnalysis(code, language) {
   const flags = [];
   const passed = [];
 
+  // Detect indentation and create nestingDepth function
+  const indentSize = detectIndentSize(rawLines);
+  const nestingDepth = nestingDepthFactory(indentSize);
+
   // --- 1. SINGLE PASS ARCHITECTURE (Fixes O(n³)) ---
   // We scan the file exactly ONCE to check all loop-related rules.
   const loopRx = /\b(for|while|forEach)\b/;
@@ -317,12 +395,14 @@ function runAnalysis(code, language) {
 
   for (const line of lines) {
     const d = nestingDepth(line);
-    
-    if (loopRx.test(line)) { 
-      inLoop = true; 
-      currentLoopDepth = d; 
+
+    // Start tracking loop
+    if (loopRx.test(line)) {
+      inLoop = true;
+      currentLoopDepth = d;
     }
 
+    // Check for issues inside loop (must be at greater depth)
     if (inLoop && d > currentLoopDepth) {
       if (!triggeredRuleIds.has("linear-scan-in-loop") && /\.(includes|indexOf|find|filter|some|every|search)\s*\(/.test(line)) {
         triggeredRuleIds.add("linear-scan-in-loop");
@@ -338,8 +418,10 @@ function runAnalysis(code, language) {
       }
     }
 
-    if (inLoop && d <= currentLoopDepth && !loopRx.test(line)) { 
-      inLoop = false; 
+    // Exit loop tracking when depth drops below loop level
+    // AND the line has actual content (not just whitespace/braces)
+    if (inLoop && d < currentLoopDepth && line.trim().length > 0 && !/^[}\])]\s*$/.test(line.trim())) {
+      inLoop = false;
     }
   }
 
@@ -356,7 +438,7 @@ function runAnalysis(code, language) {
     // Otherwise, run the standard test for non-loop rules
     else if (!["linear-scan-in-loop", "alloc-in-loop", "sort-in-loop", "async-in-loop"].includes(rule.id)) {
       try {
-        triggered = rule.test(lines, code, rawLines);
+        triggered = rule.test(lines, code, rawLines, nestingDepth);
       } catch (_) {}
     }
 
@@ -420,13 +502,40 @@ function parseGitHubUrl(url) {
 }
 
 async function fetchGitHubFile(info) {
-  const res = await fetch(
-    `https://api.github.com/repos/${info.owner}/${info.repo}/contents/${info.path}?ref=${info.branch}`
-  );
-  if (!res.ok) throw new Error(`GitHub ${res.status} — repo may be private or URL invalid`);
-  const data = await res.json();
-  if (data.encoding === "base64") return atob(data.content.replace(/\n/g, ""));
-  throw new Error("Unexpected GitHub response format");
+  // Add timeout to prevent hanging
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+
+  try {
+    const res = await fetch(
+      `https://api.github.com/repos/${info.owner}/${info.repo}/contents/${info.path}?ref=${info.branch}`,
+      { signal: controller.signal }
+    );
+    clearTimeout(timeoutId);
+
+    if (!res.ok) {
+      if (res.status === 404) throw new Error("File not found. Check the URL and ensure the repository is public.");
+      if (res.status === 403) throw new Error("API rate limit exceeded. Try again in a few minutes.");
+      throw new Error(`GitHub ${res.status} — repo may be private or URL invalid`);
+    }
+
+    const data = await res.json();
+    if (data.encoding === "base64") {
+      const decoded = atob(data.content.replace(/\n/g, ""));
+      // Validate decoded size (max 1MB)
+      if (decoded.length > 1024 * 1024) {
+        throw new Error("File too large (>1MB). Please use a smaller file.");
+      }
+      return decoded;
+    }
+    throw new Error("Unexpected GitHub response format");
+  } catch (err) {
+    clearTimeout(timeoutId);
+    if (err.name === 'AbortError') {
+      throw new Error("Request timed out. GitHub API may be slow or unreachable.");
+    }
+    throw err;
+  }
 }
 
 const EXT_LANG = { py:"python",js:"javascript",ts:"typescript",java:"java",cpp:"cpp",go:"go",rs:"rust",c:"c",rb:"ruby",swift:"swift" };
@@ -664,11 +773,26 @@ export default function App() {
   const fileRef = useRef(null);
 
   const handleFileRead = useCallback((file) => {
+    // Validate file size (max 5MB)
+    const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB in bytes
+    if (file.size > MAX_FILE_SIZE) {
+      setError(`File too large (${(file.size / 1024 / 1024).toFixed(2)}MB). Maximum size is 5MB.`);
+      return;
+    }
+
+    // Validate file type by extension
     const ext = file.name.split(".").pop().toLowerCase();
-    if (EXT_LANG[ext]) setLang(EXT_LANG[ext]);
+    if (!EXT_LANG[ext]) {
+      setError(`Unsupported file type: .${ext}. Please upload a code file (.py, .js, .ts, etc.)`);
+      return;
+    }
+
+    setError("");
+    setLang(EXT_LANG[ext]);
     setFileName(file.name);
     const reader = new FileReader();
     reader.onload = e => setCode(e.target.result);
+    reader.onerror = () => setError("Failed to read file. Please try again.");
     reader.readAsText(file);
   }, []);
 
@@ -965,7 +1089,7 @@ export default function App() {
                   ))}
                 </pre>
               </div>
-            )}cd
+            )}
           </div>
         )}
 
