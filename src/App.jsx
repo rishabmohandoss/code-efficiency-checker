@@ -16,7 +16,6 @@ import { cleanLines, detectIndentSize, nestingDepthFactory, hasNestedLoops, hasL
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RULE ENGINE — Pure local pattern matching, zero external dependencies
-// Each rule: { id, title, severity, languages, test(lines, code, raw), message, hint }
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ── All constants and rules now imported from modular files ──────────────────
@@ -126,12 +125,7 @@ function runAnalysis(code, language) {
   };
 }
 
-// ── Placeholder text for empty textarea ──────────────────────────────────────
-// (removed duplicate - now imported from constants.js)
-
-// ── EXT_LANG Language Mappings ───────────────────────────────────────────────
-// (removed duplicate - now imported from constants.js)
-
+// ── Constants for EXT_LANG mapping ───────────────────────────────────────────
 const LANGUAGES_DISPLAY = {
   javascript: "JavaScript",
   typescript: "TypeScript",
@@ -147,10 +141,10 @@ const LANGUAGES_DISPLAY = {
 
 // ── SEVERITY_COLORS for UI rendering ─────────────────────────────────────────
 const SEVERITY_COLORS = {
-  CRITICAL: { bg:"#ef444418", border:"#ef444450", text:"#f87171", bar:"#ef4444" },
-  HIGH:     { bg:"#f9731618", border:"#f9731650", text:"#fb923c", bar:"#f97316" },
-  MEDIUM:   { bg:"#eab30818", border:"#eab30850", text:"#fbbf24", bar:"#eab308" },
-  LOW:      { bg:"#6b728018", border:"#6b728050", text:"#9ca3af", bar:"#6b7280" },
+  CRITICAL: { bg:"rgba(220, 38, 38, 0.08)", border:"rgba(220, 38, 38, 0.3)", text:"#ef4444", badge:"#dc2626" },
+  HIGH:     { bg:"rgba(249, 115, 22, 0.08)", border:"rgba(249, 115, 22, 0.3)", text:"#f97316", badge:"#ea580c" },
+  MEDIUM:   { bg:"rgba(234, 179, 8, 0.08)", border:"rgba(234, 179, 8, 0.3)", text:"#eab308", badge:"#ca8a04" },
+  LOW:      { bg:"rgba(107, 114, 128, 0.08)", border:"rgba(107, 114, 128, 0.3)", text:"#9ca3af", badge:"#6b7280" },
 };
 
 // ── GITHUB INTEGRATION ────────────────────────────────────────────────────────
@@ -252,7 +246,7 @@ function App() {
   const [code, setCode] = useState("");
   const [result, setResult] = useState(null);
   const [language, setLanguage] = useState("javascript");
-  const [method, setMethod] = useState("paste"); // 'paste', 'upload', 'github'
+  const [method, setMethod] = useState("paste");
   const [githubUrl, setGithubUrl] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -281,7 +275,6 @@ function App() {
       let sourceCode = code;
 
       if (method === 'github') {
-        // Cancel any previous request
         if (abortControllerRef.current) {
           abortControllerRef.current.abort();
         }
@@ -295,7 +288,6 @@ function App() {
         }
 
         if (info.isRepoUrl) {
-          // Analyze entire repository
           const repoResult = await analyzeGitHubRepository(
             info,
             (progress) => setRepoProgress(progress),
@@ -309,7 +301,6 @@ function App() {
           setLoading(false);
           return;
         } else {
-          // Single file
           sourceCode = await fetchGitHubFile(info, signal);
           const ext = info.path.split('.').pop().toLowerCase();
           const detectedLang = EXT_LANG[ext] || 'javascript';
@@ -364,182 +355,77 @@ function App() {
   return (
     <div style={{
       minHeight:"100vh",
-      background:"#000000",
-      color:"#e2e8f0",
-      padding:"80px 24px",
-      position:"relative",
-      overflow:"hidden"
+      background:"#0a0a0a",
+      color:"#e5e7eb",
+      fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     }}>
-      {/* Animated gradient mesh background */}
-      <div style={{ position:"fixed", inset:0, zIndex:0, overflow:"hidden" }}>
-        {/* Base gradient */}
-        <div style={{
-          position:"absolute", inset:0,
-          background:"radial-gradient(circle at 50% 50%, rgba(17, 24, 39, 0.8) 0%, rgba(0, 0, 0, 1) 100%)",
-        }}/>
+      {/* Subtle background grid */}
+      <div style={{
+        position:"fixed",
+        inset:0,
+        backgroundImage:`
+          linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)
+        `,
+        backgroundSize:"50px 50px",
+        pointerEvents:"none",
+        zIndex:0
+      }}/>
 
-        {/* Animated gradient orbs */}
-        <div style={{
-          position:"absolute", top:"-50%", left:"-20%",
-          width:"100%", height:"100%",
-          background:"radial-gradient(circle, rgba(59, 130, 246, 0.15) 0%, transparent 70%)",
-          filter:"blur(60px)",
-          animation:"mesh-1 20s ease-in-out infinite",
-        }}/>
+      {/* Content */}
+      <div style={{ position:"relative", zIndex:1, maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
 
-        <div style={{
-          position:"absolute", bottom:"-50%", right:"-20%",
-          width:"80%", height:"80%",
-          background:"radial-gradient(circle, rgba(147, 51, 234, 0.15) 0%, transparent 70%)",
-          filter:"blur(60px)",
-          animation:"mesh-2 25s ease-in-out infinite",
-        }}/>
-
-        <div style={{
-          position:"absolute", top:"20%", right:"10%",
-          width:"60%", height:"60%",
-          background:"radial-gradient(circle, rgba(16, 185, 129, 0.1) 0%, transparent 70%)",
-          filter:"blur(80px)",
-          animation:"mesh-3 30s ease-in-out infinite",
-        }}/>
-
-        {/* Floating geometric shapes */}
-        {[...Array(5)].map((_, i) => (
-          <div key={i} className="float" style={{
-            position:"absolute",
-            top:`${10 + i * 20}%`,
-            left:`${5 + i * 15}%`,
-            width:"400px",
-            height:"400px",
-            borderRadius:"30% 70% 70% 30% / 30% 30% 70% 70%",
-            background:`radial-gradient(circle, rgba(${i % 2 === 0 ? '59, 130, 246' : '147, 51, 234'}, 0.05) 0%, transparent 70%)`,
-            filter:"blur(40px)",
-            animation:`float ${6 + i * 2}s ease-in-out infinite`,
-            animationDelay:`${i * 0.5}s`,
-          }}/>
-        ))}
-
-        {/* Scan line effect */}
-        <div style={{
-          position:"absolute",
-          width:"100%",
-          height:"2px",
-          background:"linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.5), transparent)",
-          animation:"scan-line 8s linear infinite",
-          opacity:0.3
-        }}/>
-      </div>
-
-      {/* Content container */}
-      <div style={{ maxWidth:920, margin:"0 auto", position:"relative", zIndex:1 }}>
-
-        {/* Hero section */}
-        <div className="fade-in" style={{ marginBottom:64, textAlign:"center" }}>
-          {/* Glowing badge */}
+        {/* Header */}
+        <header style={{ marginBottom:48 }}>
           <div style={{
-            display:"inline-flex",
-            alignItems:"center",
-            gap:8,
-            padding:"8px 20px",
-            marginBottom:24,
-            background:"rgba(59, 130, 246, 0.08)",
+            display:"inline-block",
+            padding:"4px 12px",
+            background:"rgba(59, 130, 246, 0.1)",
             border:"1px solid rgba(59, 130, 246, 0.2)",
-            borderRadius:50,
+            borderRadius:4,
             fontSize:12,
-            fontWeight:600,
-            textTransform:"uppercase",
-            letterSpacing:"0.05em",
-            color:"rgba(96, 165, 250, 1)",
-            boxShadow:"0 0 20px rgba(59, 130, 246, 0.15)",
+            fontWeight:500,
+            color:"#60a5fa",
+            marginBottom:16,
+            letterSpacing:"0.5px"
           }}>
-            <span style={{
-              display:"inline-block",
-              width:6,
-              height:6,
-              borderRadius:"50%",
-              background:"rgba(96, 165, 250, 1)",
-              animation:"pulse-glow 2s ease-in-out infinite",
-            }}/>
-            {RULES.length} Rules • Zero API Calls • 100% Client-Side
+            {RULES.length} RULES · CLIENT-SIDE · PRIVACY-FIRST
           </div>
 
-          {/* Gradient title */}
           <h1 style={{
-            fontSize:"clamp(42px, 8vw, 84px)",
-            fontWeight:900,
-            lineHeight:1.1,
-            marginBottom:16,
-            letterSpacing:"-0.04em",
-            background:"linear-gradient(135deg, #ffffff 0%, rgba(255,255,255,0.6) 100%)",
-            WebkitBackgroundClip:"text",
-            WebkitTextFillColor:"transparent",
-            backgroundClip:"text",
+            fontSize:48,
+            fontWeight:600,
+            margin:"0 0 12px 0",
+            color:"#ffffff",
+            letterSpacing:"-0.02em"
           }}>
-            Code Efficiency<br/>
-            <span style={{
-              background:"linear-gradient(135deg, rgba(96, 165, 250, 1) 0%, rgba(147, 51, 234, 1) 100%)",
-              WebkitBackgroundClip:"text",
-              WebkitTextFillColor:"transparent",
-              backgroundClip:"text",
-            }}>Analyzer</span>
+            Code Efficiency Checker
           </h1>
 
           <p style={{
-            fontSize:"clamp(14px, 2vw, 18px)",
-            lineHeight:1.6,
-            color:"rgba(148, 163, 184, 1)",
-            maxWidth:600,
-            margin:"0 auto 32px",
+            fontSize:18,
+            color:"#9ca3af",
+            margin:0,
+            maxWidth:600
           }}>
-            Detect algorithmic bottlenecks, nested loops, and AI-generated code issues. Real-time analysis with zero server calls.
+            Detect algorithmic inefficiencies and AI-generated code issues. 100% client-side analysis with zero data collection.
           </p>
+        </header>
 
-          {/* Stats row */}
+        {/* Main input panel */}
+        <div style={{
+          background:"rgba(255,255,255,0.03)",
+          border:"1px solid rgba(255,255,255,0.1)",
+          borderRadius:8,
+          marginBottom:32,
+          overflow:"hidden"
+        }}>
+          {/* Tabs */}
           <div style={{
             display:"flex",
-            justifyContent:"center",
-            gap:40,
-            flexWrap:"wrap"
+            borderBottom:"1px solid rgba(255,255,255,0.1)",
+            background:"rgba(0,0,0,0.2)"
           }}>
-            {[
-              { label: "Languages", value: "10+" },
-              { label: "Analysis", value: "Real-time" },
-              { label: "Privacy", value: "100%" }
-            ].map((stat, i) => (
-              <div key={i} style={{ textAlign:"center" }}>
-                <div style={{
-                  fontSize:32,
-                  fontWeight:700,
-                  background:"linear-gradient(135deg, rgba(96, 165, 250, 1) 0%, rgba(147, 51, 234, 1) 100%)",
-                  WebkitBackgroundClip:"text",
-                  WebkitTextFillColor:"transparent",
-                  backgroundClip:"text",
-                  marginBottom:4
-                }}>{stat.value}</div>
-                <div style={{
-                  fontSize:12,
-                  textTransform:"uppercase",
-                  letterSpacing:"0.05em",
-                  color:"rgba(100, 116, 139, 1)",
-                  fontWeight:600
-                }}>{stat.label}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Input panel */}
-        <div className="fade-in fade-in-delay-1 glass" style={{
-          padding:32,
-          borderRadius:16,
-          marginBottom:24,
-          background:"rgba(255, 255, 255, 0.03)",
-          backdropFilter:"blur(20px) saturate(180%)",
-          border:"1px solid rgba(255, 255, 255, 0.08)",
-          boxShadow:"0 8px 32px rgba(0, 0, 0, 0.37)",
-        }}>
-          {/* Method tabs */}
-          <div style={{ display:"flex", gap:8, marginBottom:24 }}>
             {[
               { id: 'paste', label: 'Paste Code' },
               { id: 'upload', label: 'Upload File' },
@@ -550,180 +436,190 @@ function App() {
                 onClick={() => setMethod(tab.id)}
                 style={{
                   flex:1,
-                  padding:"12px 20px",
+                  padding:"14px 20px",
                   background: method === tab.id ? "rgba(59, 130, 246, 0.1)" : "transparent",
-                  border: method === tab.id ? "1px solid rgba(59, 130, 246, 0.3)" : "1px solid rgba(255, 255, 255, 0.05)",
-                  borderRadius:8,
-                  color: method === tab.id ? "rgba(96, 165, 250, 1)" : "rgba(100, 116, 139, 1)",
-                  fontSize:12,
-                  fontWeight:600,
-                  textTransform:"uppercase",
-                  letterSpacing:"0.05em",
+                  border:"none",
+                  borderBottom: method === tab.id ? "2px solid #3b82f6" : "2px solid transparent",
+                  color: method === tab.id ? "#60a5fa" : "#6b7280",
+                  fontSize:14,
+                  fontWeight:500,
                   cursor:"pointer",
-                  transition:"all 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
-                  fontFamily:"Inter, sans-serif",
+                  transition:"all 0.2s ease",
+                  fontFamily:"inherit"
                 }}
-              >{tab.label}</button>
+              >
+                {tab.label}
+              </button>
             ))}
           </div>
 
-          {method === 'paste' && (
-            <>
-              <textarea
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder={PLACEHOLDER}
-                style={{
-                  width:"100%",
-                  height:300,
-                  padding:16,
-                  background:"rgba(0, 0, 0, 0.4)",
-                  border:"1px solid rgba(255, 255, 255, 0.08)",
-                  borderRadius:8,
-                  color:"#e2e8f0",
-                  fontSize:14,
-                  fontFamily:"JetBrains Mono, monospace",
-                  resize:"vertical",
-                  marginBottom:16,
-                  lineHeight:1.6
-                }}
-              />
-              <select
-                value={language}
-                onChange={(e) => setLanguage(e.target.value)}
-                style={{
-                  padding:"12px 16px",
-                  background:"rgba(0, 0, 0, 0.4)",
-                  border:"1px solid rgba(255, 255, 255, 0.08)",
-                  borderRadius:8,
-                  color:"#e2e8f0",
-                  fontSize:14,
-                  fontFamily:"Inter, sans-serif",
-                  cursor:"pointer",
-                  width:"100%"
-                }}
-              >
-                {LANGUAGES.map(lang => (
-                  <option key={lang} value={lang}>{LANGUAGES_DISPLAY[lang] || lang}</option>
-                ))}
-              </select>
-            </>
-          )}
+          <div style={{ padding:24 }}>
+            {method === 'paste' && (
+              <>
+                <textarea
+                  value={code}
+                  onChange={(e) => setCode(e.target.value)}
+                  placeholder={PLACEHOLDER}
+                  style={{
+                    width:"100%",
+                    height:300,
+                    padding:16,
+                    background:"#000000",
+                    border:"1px solid rgba(255,255,255,0.1)",
+                    borderRadius:6,
+                    color:"#e5e7eb",
+                    fontSize:14,
+                    fontFamily:"'JetBrains Mono', 'Courier New', monospace",
+                    resize:"vertical",
+                    marginBottom:16,
+                    lineHeight:1.6,
+                    outline:"none"
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = "rgba(59, 130, 246, 0.5)"}
+                  onBlur={(e) => e.target.style.borderColor = "rgba(255,255,255,0.1)"}
+                />
+                <select
+                  value={language}
+                  onChange={(e) => setLanguage(e.target.value)}
+                  style={{
+                    padding:"10px 16px",
+                    background:"#000000",
+                    border:"1px solid rgba(255,255,255,0.1)",
+                    borderRadius:6,
+                    color:"#e5e7eb",
+                    fontSize:14,
+                    cursor:"pointer",
+                    width:"100%",
+                    fontFamily:"inherit",
+                    outline:"none"
+                  }}
+                >
+                  {LANGUAGES.map(lang => (
+                    <option key={lang} value={lang}>{LANGUAGES_DISPLAY[lang] || lang}</option>
+                  ))}
+                </select>
+              </>
+            )}
 
-          {method === 'upload' && (
-            <div>
-              <input
-                type="file"
-                ref={fileInputRef}
-                onChange={handleFileUpload}
-                accept=".js,.ts,.py,.java,.cpp,.c,.go,.rs,.rb,.swift"
-                style={{ display:"none" }}
-              />
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                style={{
-                  width:"100%",
-                  padding:48,
-                  background:"rgba(59, 130, 246, 0.05)",
-                  border:"2px dashed rgba(59, 130, 246, 0.3)",
-                  borderRadius:8,
-                  color:"rgba(96, 165, 250, 1)",
-                  fontSize:16,
-                  fontWeight:600,
-                  cursor:"pointer",
-                  transition:"all 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
-                  fontFamily:"Inter, sans-serif",
-                }}
-              >
-                Click to upload file (max {MAX_FILE_SIZE / 1024 / 1024}MB)
-              </button>
-              {code && (
-                <div style={{
-                  marginTop:16,
-                  padding:12,
-                  background:"rgba(16, 185, 129, 0.1)",
-                  border:"1px solid rgba(16, 185, 129, 0.3)",
-                  borderRadius:8,
-                  color:"rgba(16, 185, 129, 1)",
-                  fontSize:14
-                }}>
-                  ✓ File loaded ({code.length} characters)
-                </div>
-              )}
-            </div>
-          )}
+            {method === 'upload' && (
+              <div>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  onChange={handleFileUpload}
+                  accept=".js,.ts,.py,.java,.cpp,.c,.go,.rs,.rb,.swift"
+                  style={{ display:"none" }}
+                />
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  style={{
+                    width:"100%",
+                    padding:48,
+                    background:"rgba(59, 130, 246, 0.05)",
+                    border:"2px dashed rgba(59, 130, 246, 0.3)",
+                    borderRadius:6,
+                    color:"#60a5fa",
+                    fontSize:16,
+                    fontWeight:500,
+                    cursor:"pointer",
+                    transition:"all 0.2s ease",
+                    fontFamily:"inherit"
+                  }}
+                  onMouseOver={(e) => e.target.style.background = "rgba(59, 130, 246, 0.1)"}
+                  onMouseOut={(e) => e.target.style.background = "rgba(59, 130, 246, 0.05)"}
+                >
+                  Click to upload file (max {MAX_FILE_SIZE / 1024 / 1024}MB)
+                </button>
+                {code && (
+                  <div style={{
+                    marginTop:16,
+                    padding:12,
+                    background:"rgba(16, 185, 129, 0.1)",
+                    border:"1px solid rgba(16, 185, 129, 0.3)",
+                    borderRadius:6,
+                    color:"#10b981",
+                    fontSize:14
+                  }}>
+                    ✓ File loaded ({code.length} characters)
+                  </div>
+                )}
+              </div>
+            )}
 
-          {method === 'github' && (
-            <>
-              <input
-                type="text"
-                value={githubUrl}
-                onChange={(e) => setGithubUrl(e.target.value)}
-                placeholder="https://github.com/owner/repo/blob/main/file.js or https://github.com/owner/repo"
-                style={{
-                  width:"100%",
-                  padding:"16px",
-                  background:"rgba(0, 0, 0, 0.4)",
-                  border:"1px solid rgba(255, 255, 255, 0.08)",
-                  borderRadius:8,
-                  color:"#e2e8f0",
-                  fontSize:14,
-                  fontFamily:"JetBrains Mono, monospace",
-                  marginBottom:8
-                }}
-              />
-              <p style={{ fontSize:12, color:"rgba(148, 163, 184, 1)", margin:0 }}>
-                Supports single files or entire repositories (analyzes up to {MAX_REPO_FILES} files)
-              </p>
-            </>
-          )}
+            {method === 'github' && (
+              <>
+                <input
+                  type="text"
+                  value={githubUrl}
+                  onChange={(e) => setGithubUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repo/blob/main/file.js"
+                  style={{
+                    width:"100%",
+                    padding:"12px 16px",
+                    background:"#000000",
+                    border:"1px solid rgba(255,255,255,0.1)",
+                    borderRadius:6,
+                    color:"#e5e7eb",
+                    fontSize:14,
+                    fontFamily:"'JetBrains Mono', monospace",
+                    marginBottom:8,
+                    outline:"none"
+                  }}
+                  onFocus={(e) => e.target.style.borderColor = "rgba(59, 130, 246, 0.5)"}
+                  onBlur={(e) => e.target.style.borderColor = "rgba(255,255,255,0.1)"}
+                />
+                <p style={{ fontSize:12, color:"#6b7280", margin:0 }}>
+                  Supports single files or entire repositories (analyzes up to {MAX_REPO_FILES} files)
+                </p>
+              </>
+            )}
 
-          {error && (
-            <div style={{
-              marginTop:16,
-              padding:12,
-              background:"rgba(239, 68, 68, 0.1)",
-              border:"1px solid rgba(239, 68, 68, 0.3)",
-              borderRadius:8,
-              color:"rgba(248, 113, 113, 1)",
-              fontSize:14
-            }}>
-              {error}
-            </div>
-          )}
+            {error && (
+              <div style={{
+                marginTop:16,
+                padding:12,
+                background:"rgba(220, 38, 38, 0.1)",
+                border:"1px solid rgba(220, 38, 38, 0.3)",
+                borderRadius:6,
+                color:"#ef4444",
+                fontSize:14
+              }}>
+                {error}
+              </div>
+            )}
 
-          <button
-            onClick={handleAnalyze}
-            disabled={loading}
-            style={{
-              width:"100%",
-              marginTop:24,
-              padding:"16px 32px",
-              background: loading ? "rgba(100, 116, 139, 0.3)" : "linear-gradient(135deg, rgba(59, 130, 246, 1) 0%, rgba(147, 51, 234, 1) 100%)",
-              border:"none",
-              borderRadius:8,
-              color:"#ffffff",
-              fontSize:16,
-              fontWeight:700,
-              cursor: loading ? "not-allowed" : "pointer",
-              transition:"all 0.3s cubic-bezier(0.16, 1, 0.3, 1)",
-              boxShadow: loading ? "none" : "0 4px 20px rgba(59, 130, 246, 0.4)",
-              fontFamily:"Inter, sans-serif",
-              textTransform:"uppercase",
-              letterSpacing:"0.05em",
-              opacity: loading ? 0.5 : 1,
-            }}
-          >
-            {loading ? (repoProgress ? `Analyzing ${repoProgress.current}/${repoProgress.total}...` : "Analyzing...") : "Analyze Code"}
-          </button>
+            <button
+              onClick={handleAnalyze}
+              disabled={loading}
+              style={{
+                width:"100%",
+                marginTop:16,
+                padding:"14px 24px",
+                background: loading ? "rgba(59, 130, 246, 0.5)" : "#3b82f6",
+                border:"none",
+                borderRadius:6,
+                color:"#ffffff",
+                fontSize:16,
+                fontWeight:600,
+                cursor: loading ? "not-allowed" : "pointer",
+                transition:"all 0.2s ease",
+                fontFamily:"inherit",
+                opacity: loading ? 0.7 : 1
+              }}
+              onMouseOver={(e) => !loading && (e.target.style.background = "#2563eb")}
+              onMouseOut={(e) => !loading && (e.target.style.background = "#3b82f6")}
+            >
+              {loading ? (repoProgress ? `Analyzing ${repoProgress.current}/${repoProgress.total}...` : "Analyzing...") : "Analyze Code"}
+            </button>
+          </div>
         </div>
 
-        {/* Results section */}
+        {/* Results */}
         {result && (
-          <div className="fade-in fade-in-delay-2">
+          <div>
             {result.type === 'single' && (
               <div>
-                {/* Stats summary */}
+                {/* Stats */}
                 <div style={{
                   display:"grid",
                   gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
@@ -731,20 +627,18 @@ function App() {
                   marginBottom:24
                 }}>
                   {[
-                    { label: "Total Rules", value: result.data.stats.totalRules, color: "rgba(100, 116, 139, 1)" },
-                    { label: "Passed", value: result.data.stats.passed, color: "rgba(16, 185, 129, 1)" },
-                    { label: "Failed", value: result.data.stats.failed, color: result.data.stats.failed > 0 ? "rgba(239, 68, 68, 1)" : "rgba(16, 185, 129, 1)" },
-                    { label: "Complexity", value: result.data.stats.complexity, color: "rgba(147, 51, 234, 1)" }
+                    { label: "Total Rules", value: result.data.stats.totalRules, color: "#6b7280" },
+                    { label: "Passed", value: result.data.stats.passed, color: "#10b981" },
+                    { label: "Failed", value: result.data.stats.failed, color: result.data.stats.failed > 0 ? "#ef4444" : "#10b981" },
+                    { label: "Complexity", value: result.data.stats.complexity, color: "#8b5cf6" }
                   ].map((stat, i) => (
-                    <div key={i} className="glass" style={{
+                    <div key={i} style={{
                       padding:20,
-                      borderRadius:12,
-                      background:"rgba(255, 255, 255, 0.03)",
-                      backdropFilter:"blur(20px) saturate(180%)",
-                      border:"1px solid rgba(255, 255, 255, 0.08)",
-                      boxShadow:"0 8px 32px rgba(0, 0, 0, 0.37)",
+                      background:"rgba(255,255,255,0.03)",
+                      border:"1px solid rgba(255,255,255,0.1)",
+                      borderRadius:8
                     }}>
-                      <div style={{ fontSize:12, textTransform:"uppercase", letterSpacing:"0.05em", color:"rgba(148, 163, 184, 1)", marginBottom:8, fontWeight:600 }}>
+                      <div style={{ fontSize:12, color:"#6b7280", marginBottom:8, fontWeight:500, textTransform:"uppercase", letterSpacing:"0.5px" }}>
                         {stat.label}
                       </div>
                       <div style={{ fontSize:32, fontWeight:700, color: stat.color }}>
@@ -757,39 +651,37 @@ function App() {
                 {/* Failed rules */}
                 {result.data.flags.length > 0 && (
                   <div style={{ marginBottom:24 }}>
-                    <h3 style={{ fontSize:20, fontWeight:700, marginBottom:16, color:"#ffffff" }}>
+                    <h3 style={{ fontSize:20, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
                       Issues Found ({result.data.flags.length})
                     </h3>
                     {result.data.flags.map((flag, i) => {
                       const colors = SEVERITY_COLORS[flag.severity];
                       return (
-                        <div key={i} className="glass" style={{
+                        <div key={i} style={{
                           padding:20,
-                          borderRadius:12,
                           marginBottom:12,
                           background: colors.bg,
-                          backdropFilter:"blur(20px) saturate(180%)",
                           border:`1px solid ${colors.border}`,
-                          boxShadow:"0 8px 32px rgba(0, 0, 0, 0.37)",
+                          borderRadius:8
                         }}>
                           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"start", marginBottom:12 }}>
                             <h4 style={{ fontSize:16, fontWeight:600, color:"#ffffff", margin:0 }}>
                               {flag.title}
                             </h4>
                             <div style={{
-                              padding:"4px 12px",
+                              padding:"4px 10px",
                               borderRadius:4,
-                              background: colors.bar,
+                              background: colors.badge,
                               color:"#ffffff",
                               fontSize:11,
-                              fontWeight:700,
+                              fontWeight:600,
                               textTransform:"uppercase",
-                              letterSpacing:"0.05em"
+                              letterSpacing:"0.5px"
                             }}>
                               {flag.severity}
                             </div>
                           </div>
-                          <p style={{ fontSize:14, lineHeight:1.6, color:"rgba(203, 213, 225, 1)", margin:"0 0 12px 0" }}>
+                          <p style={{ fontSize:14, lineHeight:1.6, color:"#d1d5db", margin:"0 0 12px 0" }}>
                             {flag.message}
                           </p>
                           {flag.hint && (
@@ -798,14 +690,15 @@ function App() {
                               background:"rgba(0, 0, 0, 0.3)",
                               borderRadius:6,
                               fontSize:13,
-                              color:"rgba(148, 163, 184, 1)",
-                              fontFamily:"JetBrains Mono, monospace"
+                              color:"#9ca3af",
+                              fontFamily:"'JetBrains Mono', monospace",
+                              lineHeight:1.5
                             }}>
                               <strong style={{ color: colors.text }}>Hint:</strong> {flag.hint}
                             </div>
                           )}
                           {flag.complexity && (
-                            <div style={{ marginTop:12, fontSize:12, color: colors.text, fontWeight:600 }}>
+                            <div style={{ marginTop:12, fontSize:12, color: colors.text, fontWeight:500 }}>
                               Time Complexity: {flag.complexity}
                             </div>
                           )}
@@ -818,16 +711,14 @@ function App() {
                 {/* Passed rules */}
                 {result.data.passed.length > 0 && (
                   <div>
-                    <h3 style={{ fontSize:20, fontWeight:700, marginBottom:16, color:"#ffffff" }}>
+                    <h3 style={{ fontSize:20, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
                       Passed ({result.data.passed.length})
                     </h3>
-                    <div className="glass" style={{
+                    <div style={{
                       padding:20,
-                      borderRadius:12,
                       background:"rgba(16, 185, 129, 0.05)",
-                      backdropFilter:"blur(20px) saturate(180%)",
                       border:"1px solid rgba(16, 185, 129, 0.2)",
-                      boxShadow:"0 8px 32px rgba(0, 0, 0, 0.37)",
+                      borderRadius:8
                     }}>
                       <div style={{ display:"flex", flexWrap:"wrap", gap:8 }}>
                         {result.data.passed.map((rule, i) => (
@@ -835,9 +726,9 @@ function App() {
                             padding:"6px 12px",
                             background:"rgba(16, 185, 129, 0.1)",
                             border:"1px solid rgba(16, 185, 129, 0.3)",
-                            borderRadius:6,
+                            borderRadius:4,
                             fontSize:12,
-                            color:"rgba(16, 185, 129, 1)",
+                            color:"#10b981",
                             fontWeight:500
                           }}>
                             {rule.title}
@@ -852,49 +743,45 @@ function App() {
 
             {result.type === 'repository' && (
               <div>
-                <h3 style={{ fontSize:24, fontWeight:700, marginBottom:16, color:"#ffffff" }}>
+                <h3 style={{ fontSize:24, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
                   Repository Analysis: {result.data.repoName}
                 </h3>
-                <div className="glass" style={{
+                <div style={{
                   padding:20,
-                  borderRadius:12,
                   marginBottom:16,
-                  background:"rgba(255, 255, 255, 0.03)",
-                  backdropFilter:"blur(20px) saturate(180%)",
-                  border:"1px solid rgba(255, 255, 255, 0.08)",
-                  boxShadow:"0 8px 32px rgba(0, 0, 0, 0.37)",
+                  background:"rgba(255,255,255,0.03)",
+                  border:"1px solid rgba(255,255,255,0.1)",
+                  borderRadius:8
                 }}>
-                  <p style={{ fontSize:14, color:"rgba(203, 213, 225, 1)", margin:0 }}>
+                  <p style={{ fontSize:14, color:"#d1d5db", margin:0 }}>
                     Analyzed {result.data.results.length} files
                   </p>
                 </div>
 
                 {result.data.results.map((fileResult, i) => (
-                  <div key={i} className="glass" style={{
+                  <div key={i} style={{
                     padding:20,
-                    borderRadius:12,
                     marginBottom:12,
-                    background:"rgba(255, 255, 255, 0.03)",
-                    backdropFilter:"blur(20px) saturate(180%)",
-                    border:"1px solid rgba(255, 255, 255, 0.08)",
-                    boxShadow:"0 8px 32px rgba(0, 0, 0, 0.37)",
+                    background:"rgba(255,255,255,0.03)",
+                    border:"1px solid rgba(255,255,255,0.1)",
+                    borderRadius:8
                   }}>
-                    <h4 style={{ fontSize:16, fontWeight:600, color:"#ffffff", marginBottom:8, fontFamily:"JetBrains Mono, monospace" }}>
+                    <h4 style={{ fontSize:14, fontWeight:500, color:"#ffffff", marginBottom:8, fontFamily:"'JetBrains Mono', monospace" }}>
                       {fileResult.path}
                     </h4>
                     {fileResult.error ? (
-                      <p style={{ color:"rgba(248, 113, 113, 1)", fontSize:14 }}>
+                      <p style={{ color:"#ef4444", fontSize:14, margin:0 }}>
                         Error: {fileResult.error}
                       </p>
                     ) : (
                       <div style={{ display:"flex", gap:16, fontSize:14 }}>
-                        <span style={{ color:"rgba(16, 185, 129, 1)" }}>
+                        <span style={{ color:"#10b981" }}>
                           ✓ {fileResult.analysis.stats.passed} passed
                         </span>
-                        <span style={{ color: fileResult.analysis.stats.failed > 0 ? "rgba(239, 68, 68, 1)" : "rgba(100, 116, 139, 1)" }}>
+                        <span style={{ color: fileResult.analysis.stats.failed > 0 ? "#ef4444" : "#6b7280" }}>
                           {fileResult.analysis.stats.failed > 0 ? "✗" : "—"} {fileResult.analysis.stats.failed} failed
                         </span>
-                        <span style={{ color:"rgba(148, 163, 184, 1)" }}>
+                        <span style={{ color:"#9ca3af" }}>
                           {fileResult.analysis.stats.complexity}
                         </span>
                       </div>
@@ -905,11 +792,18 @@ function App() {
             )}
           </div>
         )}
+
+        {/* Footer */}
+        <footer style={{ marginTop:64, paddingTop:24, borderTop:"1px solid rgba(255,255,255,0.1)", textAlign:"center" }}>
+          <p style={{ fontSize:13, color:"#6b7280", margin:0 }}>
+            100% client-side · No data collection · Open source
+          </p>
+        </footer>
       </div>
 
       {/* Global styles */}
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;900&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
         * {
           margin: 0;
@@ -918,134 +812,49 @@ function App() {
         }
 
         body {
-          font-family: 'Inter', sans-serif;
+          font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
           -webkit-font-smoothing: antialiased;
           -moz-osx-font-smoothing: grayscale;
+          background: #0a0a0a;
         }
 
         ::-webkit-scrollbar {
-          width: 8px;
+          width: 10px;
         }
 
         ::-webkit-scrollbar-track {
-          background: rgba(0, 0, 0, 0.3);
+          background: #0a0a0a;
         }
 
         ::-webkit-scrollbar-thumb {
-          background: rgba(59, 130, 246, 0.5);
-          border-radius: 4px;
+          background: rgba(255,255,255,0.1);
+          border-radius: 5px;
         }
 
         ::-webkit-scrollbar-thumb:hover {
-          background: rgba(59, 130, 246, 0.7);
+          background: rgba(255,255,255,0.2);
         }
 
-        @keyframes fade-up {
-          from {
-            opacity: 0;
-            transform: translateY(40px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
+        ::selection {
+          background: rgba(59, 130, 246, 0.3);
+          color: #ffffff;
         }
 
-        .fade-in {
-          animation: fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        textarea::-webkit-scrollbar {
+          width: 8px;
         }
 
-        .fade-in-delay-1 {
-          opacity: 0;
-          animation: fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.2s forwards;
+        textarea::-webkit-scrollbar-track {
+          background: transparent;
         }
 
-        .fade-in-delay-2 {
-          opacity: 0;
-          animation: fade-up 0.8s cubic-bezier(0.16, 1, 0.3, 1) 0.4s forwards;
+        textarea::-webkit-scrollbar-thumb {
+          background: rgba(255,255,255,0.1);
+          border-radius: 4px;
         }
 
-        @keyframes float {
-          0%, 100% {
-            transform: translate(0, 0) rotate(0deg);
-          }
-          25% {
-            transform: translate(10px, -10px) rotate(5deg);
-          }
-          50% {
-            transform: translate(-10px, 10px) rotate(-5deg);
-          }
-          75% {
-            transform: translate(10px, 10px) rotate(5deg);
-          }
-        }
-
-        @keyframes mesh-1 {
-          0%, 100% {
-            transform: translate(0, 0) rotate(0deg);
-          }
-          50% {
-            transform: translate(30%, 20%) rotate(180deg);
-          }
-        }
-
-        @keyframes mesh-2 {
-          0%, 100% {
-            transform: translate(0, 0) rotate(0deg);
-          }
-          50% {
-            transform: translate(-20%, 30%) rotate(-180deg);
-          }
-        }
-
-        @keyframes mesh-3 {
-          0%, 100% {
-            transform: scale(1) rotate(0deg);
-          }
-          50% {
-            transform: scale(1.2) rotate(90deg);
-          }
-        }
-
-        @keyframes pulse-glow {
-          0%, 100% {
-            opacity: 1;
-            box-shadow: 0 0 8px rgba(96, 165, 250, 0.8);
-          }
-          50% {
-            opacity: 0.6;
-            box-shadow: 0 0 16px rgba(96, 165, 250, 1);
-          }
-        }
-
-        @keyframes scan-line {
-          0% {
-            transform: translateY(-100%);
-          }
-          100% {
-            transform: translateY(100vh);
-          }
-        }
-
-        @keyframes spin {
-          to {
-            transform: rotate(360deg);
-          }
-        }
-
-        button:hover:not(:disabled), select:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 6px 24px rgba(59, 130, 246, 0.5);
-        }
-
-        .glass {
-          transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
-        }
-
-        .glass:hover {
-          transform: translateY(-2px);
-          box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
-          border-color: rgba(255, 255, 255, 0.12);
+        button:active {
+          transform: scale(0.98);
         }
       `}</style>
     </div>
