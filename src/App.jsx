@@ -1,5 +1,7 @@
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { jsPDF } from "jspdf";
+import TOPOLOGY from "vanta/dist/vanta.topology.min";
+import * as THREE from "three";
 import { RULES } from './rules/index.js';
 import {
   SEVERITY,
@@ -266,6 +268,8 @@ function App() {
   const [showExamples, setShowExamples] = useState(false);
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const vantaRef = useRef(null);
+  const vantaEffect = useRef(null);
 
   const handleAnalyze = useCallback(async () => {
     if (!code.trim() && method !== 'github') {
@@ -481,6 +485,33 @@ function App() {
     doc.save(filename);
   };
 
+  // Initialize Vanta.js background effect
+  useEffect(() => {
+    if (!vantaEffect.current && vantaRef.current) {
+      vantaEffect.current = TOPOLOGY({
+        el: vantaRef.current,
+        THREE: THREE,
+        mouseControls: true,
+        touchControls: true,
+        gyroControls: false,
+        minHeight: 200.00,
+        minWidth: 200.00,
+        scale: 1.00,
+        scaleMobile: 1.00,
+        color: 0x3b82f6,
+        backgroundColor: 0x0a0a0a,
+        points: 8.00,
+        maxDistance: 20.00,
+        spacing: 16.00
+      });
+    }
+    return () => {
+      if (vantaEffect.current) {
+        vantaEffect.current.destroy();
+      }
+    };
+  }, []);
+
   return (
     <div style={{
       minHeight:"100vh",
@@ -488,18 +519,15 @@ function App() {
       color:"#e5e7eb",
       fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     }}>
-      {/* Subtle background grid */}
-      <div style={{
-        position:"fixed",
-        inset:0,
-        backgroundImage:`
-          linear-gradient(rgba(255,255,255,0.02) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255,255,255,0.02) 1px, transparent 1px)
-        `,
-        backgroundSize:"50px 50px",
-        pointerEvents:"none",
-        zIndex:0
-      }}/>
+      {/* Vanta.js animated background */}
+      <div
+        ref={vantaRef}
+        style={{
+          position:"fixed",
+          inset:0,
+          zIndex:0
+        }}
+      />
 
       {/* Content */}
       <div style={{ position:"relative", zIndex:1, maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
