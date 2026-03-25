@@ -115,18 +115,18 @@ Deferred to future milestone.
 | TEST-02 | Phase 2 | Pending |
 | TEST-03 | Phase 2 | Pending |
 | TEST-04 | Phase 2 | Pending |
-| FIXS-01 | Phase 3 | Pending |
-| FIXS-02 | Phase 3 | Pending |
-| FIXS-03 | Phase 3 | Pending |
 | PERF-01 | Phase 3 | Pending |
 | PERF-02 | Phase 3 | Pending |
-| VIZ-01 | Phase 4 | Pending |
-| VIZ-02 | Phase 4 | Pending |
-| LRN-01 | Phase 5 | Pending |
-| LRN-02 | Phase 5 | Pending |
-| LRN-03 | Phase 5 | Pending |
-| INTG-01 | Phase 6 | Pending |
-| INTG-02 | Phase 6 | Pending |
+| FIXS-01 | Phase 4 | Pending |
+| FIXS-02 | Phase 4 | Pending |
+| FIXS-03 | Phase 4 | Pending |
+| VIZ-01 | Phase 5 | Pending |
+| VIZ-02 | Phase 5 | Pending |
+| LRN-01 | Phase 6 | Pending |
+| LRN-02 | Phase 6 | Pending |
+| LRN-03 | Phase 6 | Pending |
+| INTG-01 | Phase 7 | Pending |
+| INTG-02 | Phase 7 | Pending |
 
 **Coverage:**
 - v1 requirements: 26 total
@@ -135,4 +135,4 @@ Deferred to future milestone.
 
 ---
 *Requirements defined: 2026-03-25*
-*Last updated: 2026-03-25 after initial definition*
+*Last updated: 2026-03-25 — traceability updated to match 7-phase roadmap*
