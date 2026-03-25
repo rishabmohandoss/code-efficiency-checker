@@ -1,8 +1,13 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { jsPDF } from "jspdf";
-import TOPOLOGY from "vanta/dist/vanta.topology.min";
 import * as THREE from "three";
+import TOPOLOGY from "vanta/dist/vanta.topology.min";
 import { RULES } from './rules/index.js';
+
+// Make THREE available globally for Vanta.js
+if (typeof window !== 'undefined') {
+  window.THREE = THREE;
+}
 import {
   SEVERITY,
   COMPLEXITY_HIERARCHY,
@@ -488,26 +493,33 @@ function App() {
   // Initialize Vanta.js background effect
   useEffect(() => {
     if (!vantaEffect.current && vantaRef.current) {
-      vantaEffect.current = TOPOLOGY({
-        el: vantaRef.current,
-        THREE: THREE,
-        mouseControls: true,
-        touchControls: true,
-        gyroControls: false,
-        minHeight: 200.00,
-        minWidth: 200.00,
-        scale: 1.00,
-        scaleMobile: 1.00,
-        color: 0x3b82f6,
-        backgroundColor: 0x0a0a0a,
-        points: 8.00,
-        maxDistance: 20.00,
-        spacing: 16.00
-      });
+      try {
+        vantaEffect.current = TOPOLOGY({
+          el: vantaRef.current,
+          mouseControls: true,
+          touchControls: true,
+          gyroControls: false,
+          minHeight: 200.00,
+          minWidth: 200.00,
+          scale: 1.00,
+          scaleMobile: 1.00,
+          color: 0x3b82f6,
+          backgroundColor: 0x0a0a0a,
+          points: 8.00,
+          maxDistance: 20.00,
+          spacing: 16.00
+        });
+      } catch (error) {
+        console.error('Vanta.js initialization error:', error);
+      }
     }
     return () => {
       if (vantaEffect.current) {
-        vantaEffect.current.destroy();
+        try {
+          vantaEffect.current.destroy();
+        } catch (error) {
+          console.error('Vanta.js cleanup error:', error);
+        }
       }
     };
   }, []);
