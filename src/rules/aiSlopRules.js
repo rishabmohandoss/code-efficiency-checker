@@ -10,16 +10,26 @@ export const aiSlopRules = [
     title: "Empty Catch Block (Error Swallowing)",
     severity: "CRITICAL",
     languages: "*",
-    test: (lines) => {
+    test: (lines, code) => {
+      // Check for inline empty catch: catch(e) {} or catch (e) {}
+      if (/catch\s*\([^)]*\)\s*\{\s*\}/.test(code)) {
+        return true;
+      }
+
+      // Check for multi-line empty catch blocks
       for (let i = 0; i < lines.length; i++) {
         if (/catch\s*\(/.test(lines[i])) {
-          // Check if catch block is empty or only has comments
           let braceDepth = 0;
           let foundOpenBrace = false;
           let hasContent = false;
+          let searchLimit = Math.min(i + 10, lines.length); // Increased search range
 
-          for (let j = i; j < Math.min(i + 5, lines.length); j++) {
+          for (let j = i; j < searchLimit; j++) {
             const line = lines[j].trim();
+            // Skip comments and empty lines
+            if (line.startsWith('//') || line.startsWith('/*') || line.startsWith('*') || line.length === 0) {
+              continue;
+            }
 
             if (line.includes('{')) {
               foundOpenBrace = true;
@@ -27,17 +37,25 @@ export const aiSlopRules = [
             }
 
             if (foundOpenBrace && braceDepth > 0) {
-              // Check if there's actual code (not just braces)
-              const codeContent = line.replace(/[{}]/g, '').trim();
-              if (codeContent.length > 0) {
+              // Check if there's actual code (not just braces, comments, or whitespace)
+              const codeContent = line
+                .replace(/[{}]/g, '')
+                .replace(/\/\/.*/g, '') // Remove line comments
+                .replace(/\/\*[\s\S]*?\*\//g, '') // Remove block comments
+                .trim();
+
+              // Real content if it's not empty and not just TODO/FIXME comments
+              if (codeContent.length > 0 && !/^(TODO|FIXME|XXX|HACK):/i.test(codeContent)) {
                 hasContent = true;
+                break;
               }
             }
 
             if (line.includes('}')) {
               braceDepth--;
-              if (braceDepth === 0 && foundOpenBrace && !hasContent) {
-                return true; // Found empty catch
+              if (braceDepth === 0 && foundOpenBrace) {
+                if (!hasContent) return true; // Found empty catch
+                break; // Exit search for this catch block
               }
             }
           }

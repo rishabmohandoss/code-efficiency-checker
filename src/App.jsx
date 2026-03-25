@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from "react";
+import { jsPDF } from "jspdf";
 import { RULES } from './rules/index.js';
 import {
   SEVERITY,
@@ -13,6 +14,8 @@ import {
   PLACEHOLDER
 } from './config/constants.js';
 import { cleanLines, detectIndentSize, nestingDepthFactory, hasNestedLoops, hasLinearScanInLoop, maxLoopDepth } from './utils/codeAnalysis.js';
+import { EXAMPLE_LIST } from './utils/examples.js';
+import { getBeginnerExplanation, calculateImpactScore } from './utils/beginnerExplanations.js';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // RULE ENGINE — Pure local pattern matching, zero external dependencies
@@ -66,12 +69,20 @@ function runAnalysis(code, language) {
       if (!triggeredRuleIds.has("async-in-loop") && /\bawait\b/.test(line)) {
         triggeredRuleIds.add("async-in-loop");
       }
+      if (!triggeredRuleIds.has("dom-in-loop") && /document\.(getElementById|querySelector|createElement|appendChild)|\.innerHTML|\.classList\./.test(line)) {
+        triggeredRuleIds.add("dom-in-loop");
+      }
     }
 
     // Exit loop tracking when depth drops below loop level
-    // AND the line has actual content (not just whitespace/braces)
-    if (inLoop && d < currentLoopDepth && line.trim().length > 0 && !/^[}\])]\s*$/.test(line.trim())) {
-      inLoop = false;
+    // This means we've moved to code outside the loop
+    if (inLoop && d < currentLoopDepth) {
+      // Make sure we're not just on an empty line or a line with only whitespace
+      // We want to exit when we hit actual code at a lower depth OR a closing brace
+      const trimmed = line.trim();
+      if (trimmed.length > 0) {
+        inLoop = false;
+      }
     }
   }
 
@@ -86,7 +97,7 @@ function runAnalysis(code, language) {
       triggered = true;
     }
     // Otherwise, run the standard test for non-loop rules
-    else if (!["linear-scan-in-loop", "alloc-in-loop", "sort-in-loop", "async-in-loop"].includes(rule.id)) {
+    else if (!["linear-scan-in-loop", "alloc-in-loop", "sort-in-loop", "async-in-loop", "dom-in-loop"].includes(rule.id)) {
       try {
         triggered = rule.test(lines, code, rawLines, nestingDepth);
       } catch (_) {}
@@ -251,6 +262,8 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [repoProgress, setRepoProgress] = useState(null);
+  const [beginnerMode, setBeginnerMode] = useState(false);
+  const [showExamples, setShowExamples] = useState(false);
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
 
@@ -350,6 +363,122 @@ function App() {
       setError("Failed to read file");
     };
     reader.readAsText(file);
+  };
+
+  const handleExportPDF = () => {
+    if (!result || !result.data) return;
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
+    const margin = 20;
+    const maxWidth = pageWidth - 2 * margin;
+    let yPos = margin;
+
+    // Helper function to add text with word wrap
+    const addText = (text, fontSize = 12, isBold = false) => {
+      doc.setFontSize(fontSize);
+      doc.setFont("helvetica", isBold ? "bold" : "normal");
+      const lines = doc.splitTextToSize(text, maxWidth);
+
+      // Check if we need a new page
+      if (yPos + (lines.length * fontSize * 0.5) > pageHeight - margin) {
+        doc.addPage();
+        yPos = margin;
+      }
+
+      doc.text(lines, margin, yPos);
+      yPos += lines.length * fontSize * 0.5 + 5;
+    };
+
+    const addSpacing = (space = 5) => {
+      yPos += space;
+    };
+
+    // Title
+    addText("Code Efficiency Analysis Report", 20, true);
+    addText(`Generated: ${new Date().toLocaleString()}`, 10);
+    addSpacing(10);
+
+    // Stats
+    if (result.type === 'single') {
+      addText("Analysis Summary", 16, true);
+      addText(`Total Rules Checked: ${result.data.stats.totalRules}`, 12);
+      addText(`Passed: ${result.data.stats.passed}`, 12);
+      addText(`Failed: ${result.data.stats.failed}`, 12);
+      addText(`Worst Complexity: ${result.data.stats.complexity}`, 12);
+      addSpacing(10);
+
+      // Issues
+      if (result.data.flags.length > 0) {
+        addText(`Issues Found (${result.data.flags.length})`, 16, true);
+        addSpacing(5);
+
+        const sortedFlags = [...result.data.flags].sort((a, b) =>
+          calculateImpactScore(b) - calculateImpactScore(a)
+        );
+
+        sortedFlags.forEach((flag, i) => {
+          addText(`${i + 1}. ${flag.title} [${flag.severity}]`, 12, true);
+          addText(`${flag.message}`, 10);
+
+          if (flag.hint) {
+            addText(`Hint: ${flag.hint}`, 9);
+          }
+
+          if (flag.complexity) {
+            addText(`Time Complexity: ${flag.complexity}`, 9);
+          }
+
+          if (beginnerMode) {
+            const explanation = getBeginnerExplanation(flag.id);
+            addSpacing(3);
+            addText("Beginner Explanation:", 9, true);
+            addText(`What's happening: ${explanation.simple}`, 8);
+            addText(`Impact: ${explanation.impact}`, 8);
+            addText(`Fix: ${explanation.fix}`, 8);
+          }
+
+          addSpacing(8);
+        });
+      }
+
+      // Passed rules
+      if (result.data.passed.length > 0) {
+        addText(`Passed Rules (${result.data.passed.length})`, 16, true);
+        result.data.passed.forEach((rule, i) => {
+          if (i > 0 && i % 3 === 0) addSpacing(2);
+          addText(`• ${rule.title}`, 9);
+        });
+      }
+    } else if (result.type === 'repository') {
+      addText(`Repository Analysis: ${result.data.repoName}`, 16, true);
+      addText(`Files Analyzed: ${result.data.results.length}`, 12);
+      addSpacing(10);
+
+      result.data.results.forEach((fileResult, i) => {
+        addText(`${i + 1}. ${fileResult.path}`, 11, true);
+        if (fileResult.error) {
+          addText(`Error: ${fileResult.error}`, 9);
+        } else {
+          addText(`Passed: ${fileResult.analysis.stats.passed} | Failed: ${fileResult.analysis.stats.failed} | Complexity: ${fileResult.analysis.stats.complexity}`, 9);
+        }
+        addSpacing(5);
+      });
+    }
+
+    // Footer
+    yPos = pageHeight - 15;
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.text("Generated by Code Efficiency Checker - 100% client-side analysis", margin, yPos);
+
+    // Save
+    const filename = result.type === 'repository'
+      ? `analysis-${result.data.repoName.replace('/', '-')}.pdf`
+      : `code-analysis-${new Date().toISOString().split('T')[0]}.pdf`;
+
+    doc.save(filename);
   };
 
   return (
@@ -478,26 +607,95 @@ function App() {
                   onFocus={(e) => e.target.style.borderColor = "rgba(59, 130, 246, 0.5)"}
                   onBlur={(e) => e.target.style.borderColor = "rgba(255,255,255,0.1)"}
                 />
-                <select
-                  value={language}
-                  onChange={(e) => setLanguage(e.target.value)}
-                  style={{
-                    padding:"10px 16px",
-                    background:"#000000",
-                    border:"1px solid rgba(255,255,255,0.1)",
-                    borderRadius:6,
-                    color:"#e5e7eb",
-                    fontSize:14,
-                    cursor:"pointer",
-                    width:"100%",
-                    fontFamily:"inherit",
-                    outline:"none"
-                  }}
-                >
-                  {LANGUAGES.map(lang => (
-                    <option key={lang} value={lang}>{LANGUAGES_DISPLAY[lang] || lang}</option>
-                  ))}
-                </select>
+                <div style={{ display:"flex", gap:12, marginBottom:16 }}>
+                  <select
+                    value={language}
+                    onChange={(e) => setLanguage(e.target.value)}
+                    style={{
+                      padding:"10px 16px",
+                      background:"#000000",
+                      border:"1px solid rgba(255,255,255,0.1)",
+                      borderRadius:6,
+                      color:"#e5e7eb",
+                      fontSize:14,
+                      cursor:"pointer",
+                      flex:1,
+                      fontFamily:"inherit",
+                      outline:"none"
+                    }}
+                  >
+                    {LANGUAGES.map(lang => (
+                      <option key={lang} value={lang}>{LANGUAGES_DISPLAY[lang] || lang}</option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => setShowExamples(!showExamples)}
+                    style={{
+                      padding:"10px 20px",
+                      background:"rgba(139, 92, 246, 0.1)",
+                      border:"1px solid rgba(139, 92, 246, 0.3)",
+                      borderRadius:6,
+                      color:"#a78bfa",
+                      fontSize:14,
+                      fontWeight:500,
+                      cursor:"pointer",
+                      transition:"all 0.2s ease",
+                      fontFamily:"inherit",
+                      whiteSpace:"nowrap"
+                    }}
+                    onMouseOver={(e) => e.target.style.background = "rgba(139, 92, 246, 0.15)"}
+                    onMouseOut={(e) => e.target.style.background = "rgba(139, 92, 246, 0.1)"}
+                  >
+                    Try Example {showExamples ? "▲" : "▼"}
+                  </button>
+                </div>
+                {showExamples && (
+                  <div style={{
+                    marginBottom:16,
+                    padding:12,
+                    background:"rgba(0,0,0,0.5)",
+                    border:"1px solid rgba(139, 92, 246, 0.3)",
+                    borderRadius:6
+                  }}>
+                    <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(250px, 1fr))", gap:8 }}>
+                      {EXAMPLE_LIST.map(ex => (
+                        <button
+                          key={ex.id}
+                          onClick={() => {
+                            setCode(ex.code);
+                            setLanguage(ex.language);
+                            setShowExamples(false);
+                            setError("");
+                          }}
+                          style={{
+                            padding:"12px 16px",
+                            background:"rgba(139, 92, 246, 0.1)",
+                            border:"1px solid rgba(139, 92, 246, 0.2)",
+                            borderRadius:6,
+                            color:"#e5e7eb",
+                            fontSize:13,
+                            fontWeight:500,
+                            cursor:"pointer",
+                            transition:"all 0.2s ease",
+                            fontFamily:"inherit",
+                            textAlign:"left"
+                          }}
+                          onMouseOver={(e) => {
+                            e.target.style.background = "rgba(139, 92, 246, 0.2)";
+                            e.target.style.borderColor = "rgba(139, 92, 246, 0.4)";
+                          }}
+                          onMouseOut={(e) => {
+                            e.target.style.background = "rgba(139, 92, 246, 0.1)";
+                            e.target.style.borderColor = "rgba(139, 92, 246, 0.2)";
+                          }}
+                        >
+                          <div style={{ fontWeight:600, marginBottom:4, color:"#a78bfa" }}>{ex.title}</div>
+                          <div style={{ fontSize:11, color:"#9ca3af" }}>{ex.description}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </>
             )}
 
@@ -648,13 +846,61 @@ function App() {
                   ))}
                 </div>
 
+                {/* Export and Controls */}
+                <div style={{ display:"flex", justifyContent:"flex-end", gap:12, marginBottom:16 }}>
+                  <button
+                    onClick={handleExportPDF}
+                    style={{
+                      padding:"10px 20px",
+                      background:"rgba(16, 185, 129, 0.1)",
+                      border:"1px solid rgba(16, 185, 129, 0.3)",
+                      borderRadius:6,
+                      color:"#10b981",
+                      fontSize:13,
+                      fontWeight:500,
+                      cursor:"pointer",
+                      transition:"all 0.2s ease",
+                      fontFamily:"inherit"
+                    }}
+                    onMouseOver={(e) => e.target.style.background = "rgba(16, 185, 129, 0.15)"}
+                    onMouseOut={(e) => e.target.style.background = "rgba(16, 185, 129, 0.1)"}
+                  >
+                    Export PDF
+                  </button>
+                </div>
+
                 {/* Failed rules */}
                 {result.data.flags.length > 0 && (
                   <div style={{ marginBottom:24 }}>
-                    <h3 style={{ fontSize:20, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
-                      Issues Found ({result.data.flags.length})
-                    </h3>
-                    {result.data.flags.map((flag, i) => {
+                    <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                      <h3 style={{ fontSize:20, fontWeight:600, margin:0, color:"#ffffff" }}>
+                        Issues Found ({result.data.flags.length})
+                      </h3>
+                      <button
+                        onClick={() => setBeginnerMode(!beginnerMode)}
+                        style={{
+                          padding:"8px 16px",
+                          background: beginnerMode ? "rgba(59, 130, 246, 0.15)" : "rgba(255,255,255,0.05)",
+                          border: beginnerMode ? "1px solid rgba(59, 130, 246, 0.3)" : "1px solid rgba(255,255,255,0.1)",
+                          borderRadius:6,
+                          color: beginnerMode ? "#60a5fa" : "#9ca3af",
+                          fontSize:13,
+                          fontWeight:500,
+                          cursor:"pointer",
+                          transition:"all 0.2s ease",
+                          fontFamily:"inherit"
+                        }}
+                        onMouseOver={(e) => {
+                          e.target.style.background = beginnerMode ? "rgba(59, 130, 246, 0.2)" : "rgba(255,255,255,0.08)";
+                        }}
+                        onMouseOut={(e) => {
+                          e.target.style.background = beginnerMode ? "rgba(59, 130, 246, 0.15)" : "rgba(255,255,255,0.05)";
+                        }}
+                      >
+                        {beginnerMode ? "✓ " : ""}Beginner Mode
+                      </button>
+                    </div>
+                    {[...result.data.flags].sort((a, b) => calculateImpactScore(b) - calculateImpactScore(a)).map((flag, i) => {
                       const colors = SEVERITY_COLORS[flag.severity];
                       return (
                         <div key={i} style={{
@@ -684,6 +930,31 @@ function App() {
                           <p style={{ fontSize:14, lineHeight:1.6, color:"#d1d5db", margin:"0 0 12px 0" }}>
                             {flag.message}
                           </p>
+                          {beginnerMode && (
+                            <div style={{
+                              marginBottom:12,
+                              padding:16,
+                              background:"rgba(59, 130, 246, 0.08)",
+                              border:"1px solid rgba(59, 130, 246, 0.2)",
+                              borderRadius:6
+                            }}>
+                              <div style={{ fontSize:13, fontWeight:600, color:"#60a5fa", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                                Beginner Explanation
+                              </div>
+                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                <strong style={{ color:"#ffffff" }}>What's happening:</strong> {getBeginnerExplanation(flag.id).simple}
+                              </div>
+                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                <strong style={{ color:"#ffffff" }}>Impact:</strong> {getBeginnerExplanation(flag.id).impact}
+                              </div>
+                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                <strong style={{ color:"#ffffff" }}>Think of it like:</strong> {getBeginnerExplanation(flag.id).analogy}
+                              </div>
+                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb" }}>
+                                <strong style={{ color:"#10b981" }}>How to fix:</strong> {getBeginnerExplanation(flag.id).fix}
+                              </div>
+                            </div>
+                          )}
                           {flag.hint && (
                             <div style={{
                               padding:12,

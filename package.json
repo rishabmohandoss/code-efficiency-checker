@@ -10,6 +10,7 @@
     "test": "echo \"Tests are defined in tests/analyzer.test.js. Install vitest to run them: npm install -D vitest\" && exit 0"
   },
   "dependencies": {
+    "jspdf": "^2.5.2",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
