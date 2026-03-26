@@ -1,0 +1,290 @@
+# Phase 6 Test File - Container & Kubernetes Security Issues
+# This file demonstrates container and K8s misconfigurations
+
+# ==========================================
+# RULE 50: CONTAINER RUNNING AS ROOT - MEDIUM
+# ==========================================
+
+# MEDIUM: Dockerfile running as root
+# Dockerfile content:
+# FROM node:18
+# WORKDIR /app
+# COPY package*.json ./
+# RUN npm install
+# COPY . .
+# USER root              # DANGEROUS
+# EXPOSE 3000
+# CMD ["node", "server.js"]
+
+# ==========================================
+# RULE 51: EXPOSED DOCKER DAEMON - CRITICAL
+# ==========================================
+
+# CRITICAL: Docker daemon exposed on network
+# docker run -d -H tcp://0.0.0.0:2375 docker:dind    # VERY DANGEROUS
+# dockerd -H tcp://0.0.0.0:2375 &
+
+# CRITICAL: Docker socket mounted in container
+# docker run -v /var/run/docker.sock:/var/run/docker.sock myimage
+
+# Environment variables exposing Docker
+# export DOCKER_HOST=tcp://192.168.1.100:2375      # Unencrypted!
+# export DOCKER_HOST=tcp://0.0.0.0:2375
+
+# ==========================================
+# RULE 52: MISSING RESOURCE LIMITS - LOW
+# ==========================================
+
+# LOW: Kubernetes pod without resource limits
+apiVersion: v1
+kind: Pod
+metadata:
+  name: webapp-no-limits
+spec:
+  containers:
+  - name: app
+    image: myapp:latest
+    ports:
+    - containerPort: 8080
+    # Missing: resources section!
+
+---
+
+# Another pod without limits
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-server
+spec:
+  replicas: 3
+  template:
+    spec:
+      containers:
+      - name: api
+        image: api:v1
+        # No resource requests/limits
+
+# ==========================================
+# RULE 53: INSECURE KUBERNETES CONFIG - HIGH
+# ==========================================
+
+# HIGH: Pod with dangerous configurations
+apiVersion: v1
+kind: Pod
+metadata:
+  name: insecure-pod
+spec:
+  automountServiceAccountToken: true    # DANGEROUS
+  hostNetwork: true                     # DANGEROUS
+  hostPID: true                         # DANGEROUS
+  hostIPC: true                         # DANGEROUS
+  containers:
+  - name: app
+    image: myapp:latest
+    securityContext:
+      privileged: true                  # VERY DANGEROUS
+      allowPrivilegeEscalation: true    # DANGEROUS
+      runAsUser: 0                      # Running as root
+    volumeMounts:
+    - name: host-root
+      mountPath: /host
+  volumes:
+  - name: host-root
+    hostPath:
+      path: /
+      type: Directory
+
+---
+
+# HIGH: Deployment with privilege escalation
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: privileged-app
+spec:
+  replicas: 2
+  template:
+    spec:
+      hostNetwork: true
+      containers:
+      - name: app
+        image: app:latest
+        securityContext:
+          allowPrivilegeEscalation: true
+          capabilities:
+            add:
+            - SYS_ADMIN              # DANGEROUS capability
+
+---
+
+# HIGH: Service account token auto-mounted
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pod-with-token
+spec:
+  automountServiceAccountToken: true   # Exposes K8s API access
+  containers:
+  - name: web
+    image: nginx
+
+# ==========================================
+# RULE 54: MISSING NETWORK POLICIES - MEDIUM
+# ==========================================
+
+# MEDIUM: Deployment without network policies
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: production
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: frontend
+  template:
+    metadata:
+      labels:
+        app: frontend
+    spec:
+      containers:
+      - name: web
+        image: nginx:latest
+        ports:
+        - containerPort: 80
+
+---
+
+# Another deployment - no network policy exists
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+spec:
+  template:
+    spec:
+      containers:
+      - name: api
+        image: api:latest
+
+# Notice: No NetworkPolicy resources defined!
+# All pods can communicate with all other pods - no segmentation
+
+# ==========================================
+# CORRECT EXAMPLES (Should NOT trigger)
+# ==========================================
+
+---
+
+# CORRECT: Pod with security best practices
+apiVersion: v1
+kind: Pod
+metadata:
+  name: secure-pod
+spec:
+  automountServiceAccountToken: false
+  containers:
+  - name: app
+    image: myapp:latest
+    securityContext:
+      runAsNonRoot: true
+      runAsUser: 1000
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: true
+      capabilities:
+        drop:
+        - ALL
+    resources:
+      requests:
+        memory: "128Mi"
+        cpu: "100m"
+      limits:
+        memory: "256Mi"
+        cpu: "200m"
+
+---
+
+# CORRECT: Network policy example
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-netpol
+spec:
+  podSelector:
+    matchLabels:
+      app: frontend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: loadbalancer
+    ports:
+    - protocol: TCP
+      port: 80
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: backend
+    ports:
+    - protocol: TCP
+      port: 8080
+
+---
+
+# CORRECT: Dockerfile with non-root user
+# FROM node:18-alpine
+# RUN addgroup -g 1000 appgroup && adduser -D -u 1000 -G appgroup appuser
+# WORKDIR /app
+# COPY package*.json ./
+# RUN npm ci --only=production
+# COPY . .
+# RUN chown -R appuser:appgroup /app
+# USER appuser
+# EXPOSE 3000
+# CMD ["node", "server.js"]
+
+# ==========================================
+# EXPECTED DETECTIONS:
+# ==========================================
+#
+# CRITICAL: 2-3 issues
+#   - Exposed Docker daemon (tcp://0.0.0.0:2375)
+#   - Docker socket mounted
+#   - DOCKER_HOST environment variables
+#
+# HIGH: 8-10 issues
+#   - automountServiceAccountToken: true (2-3)
+#   - hostNetwork: true (2)
+#   - hostPID: true
+#   - hostIPC: true
+#   - privileged: true (2)
+#   - allowPrivilegeEscalation: true (2-3)
+#
+# MEDIUM: 3-4 issues
+#   - USER root in Dockerfile
+#   - runAsUser: 0
+#   - Missing network policies (1-2 deployments)
+#
+# LOW: 2-3 issues
+#   - Missing resource limits (2-3 pods)
+#
+# TOTAL: 15-20 issues expected
+# ==========================================
+
+# Notes:
+# - Running containers as root enables container escape
+# - Exposed Docker daemon = full host compromise
+# - hostNetwork bypasses network policies
+# - privileged containers can do anything
+# - Missing network policies = no micro-segmentation
+# - Resource limits prevent DoS
+#
+# Real-world examples:
+# - Tesla (2018): Exposed Docker API led to cryptomining
+# - Shopify (2017): Container escape via privileged container
+# - Many cryptojacking attacks exploit exposed Docker daemons

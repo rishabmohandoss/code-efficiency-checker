@@ -73,6 +73,7 @@ export function runSecurityAnalysis(code, language = 'javascript') {
   detectDependencyIssues(code, lines, results, language);
   detectCICDIssues(code, lines, results, language);
   detectCodeQualityPerformance(code, lines, results, language);
+  detectInfrastructureCloudSecurity(code, lines, results, language);
 
   // Calculate final stats
   results.stats.critical = results.critical.length;
@@ -2129,6 +2130,358 @@ function detectCodeQualityPerformance(code, lines, results, language) {
   results.stats.rulesChecked += 6; // Rules 67-72
 }
 
+/**
+ * Category 10: Infrastructure & Cloud Security (Rules 46-58)
+ */
+function detectInfrastructureCloudSecurity(code, lines, results, language) {
+  const issues = [];
+
+  // Rule 46: Exposed Cloud Credentials - CRITICAL
+  const cloudCredentialPatterns = [
+    { pattern: /aws_access_key_id\s*=\s*['"]\w{20}['"]/gi, name: 'AWS Access Key', service: 'AWS' },
+    { pattern: /aws_secret_access_key\s*=\s*['"]\w{40}['"]/gi, name: 'AWS Secret Key', service: 'AWS' },
+    { pattern: /AKIA[0-9A-Z]{16}/gi, name: 'AWS Access Key ID', service: 'AWS' },
+    { pattern: /gcloud\s+auth\s+activate-service-account.*--key-file/gi, name: 'GCP Service Account', service: 'GCP' },
+    { pattern: /GOOGLE_APPLICATION_CREDENTIALS\s*=\s*['"]/gi, name: 'GCP Credentials Path', service: 'GCP' },
+    { pattern: /azure_client_id\s*=\s*['"]/gi, name: 'Azure Client ID', service: 'Azure' },
+    { pattern: /azure_client_secret\s*=\s*['"]/gi, name: 'Azure Client Secret', service: 'Azure' }
+  ];
+
+  lines.forEach((line, index) => {
+    cloudCredentialPatterns.forEach(({ pattern, name, service }) => {
+      if (pattern.test(line) && !line.trim().startsWith('//') && !line.trim().startsWith('#')) {
+        const issue = createIssue(
+          'exposed-cloud-credentials',
+          SEVERITY.CRITICAL,
+          `Exposed ${service} Credentials`,
+          `Code contains hardcoded ${service} credentials (${name}). These credentials provide access to your cloud infrastructure and can be used to: create/delete resources, access databases, read/write files in storage buckets, rack up massive bills, or steal sensitive data.`,
+          `Store cloud credentials in environment variables or use cloud-native authentication (IAM roles for AWS, Service Accounts for GCP, Managed Identity for Azure). Never hardcode credentials in code. Use: process.env.AWS_ACCESS_KEY_ID instead of hardcoding the value.`,
+          index + 1,
+          'Cloud Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 47: Overly Permissive IAM Policies - HIGH
+  const permissiveIAMPatterns = [
+    { pattern: /"Effect":\s*"Allow"[^}]*"Action":\s*"\*"/gi, name: 'AWS IAM wildcard action' },
+    { pattern: /"Effect":\s*"Allow"[^}]*"Resource":\s*"\*"/gi, name: 'AWS IAM wildcard resource' },
+    { pattern: /Action:\s*\*\s*$/gm, name: 'Wildcard IAM action' },
+    { pattern: /Resource:\s*\*\s*$/gm, name: 'Wildcard IAM resource' },
+    { pattern: /"roles\/owner"/gi, name: 'GCP Owner role' },
+    { pattern: /"roles\/editor"/gi, name: 'GCP Editor role' },
+    { pattern: /--role\s+Owner/gi, name: 'Owner role assignment' }
+  ];
+
+  lines.forEach((line, index) => {
+    permissiveIAMPatterns.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'overly-permissive-iam',
+          SEVERITY.HIGH,
+          'Overly Permissive IAM Policy',
+          `IAM policy grants excessive permissions (${name}). This violates the principle of least privilege. If these credentials are compromised, attackers have unrestricted access to your cloud resources - they can delete databases, steal data, or create expensive compute instances.`,
+          `Grant only the minimum permissions needed. Instead of Action: "*", list specific actions like ["s3:GetObject", "s3:PutObject"]. Instead of Resource: "*", specify exact resources like "arn:aws:s3:::my-bucket/*". Use separate roles for different permissions levels.`,
+          index + 1,
+          'Cloud Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 48: Unencrypted Cloud Storage - HIGH
+  const unencryptedStoragePatterns = [
+    { pattern: /"Encrypted":\s*false/gi, name: 'Disabled encryption flag' },
+    { pattern: /encryption\s*=\s*false/gi, name: 'Encryption disabled' },
+    { pattern: /ServerSideEncryption.*None/gi, name: 'No server-side encryption' },
+    { pattern: /sse_algorithm\s*=\s*""/gi, name: 'Empty SSE algorithm' },
+    { pattern: /PublicRead|PublicReadWrite/gi, name: 'Public bucket ACL' },
+    { pattern: /"BlockPublicAcls":\s*false/gi, name: 'Public ACLs allowed' }
+  ];
+
+  lines.forEach((line, index) => {
+    unencryptedStoragePatterns.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'unencrypted-cloud-storage',
+          SEVERITY.HIGH,
+          'Unencrypted Cloud Storage',
+          `Cloud storage bucket is configured without encryption (${name}). Data at rest is stored in plaintext. If an attacker gains access to the physical storage or cloud account, they can read all stored data. This violates compliance requirements (GDPR, HIPAA, PCI-DSS).`,
+          `Enable server-side encryption. AWS S3: enable AES-256 or KMS encryption. GCP Storage: enable CMEK or Google-managed encryption. Azure Blob: enable Storage Service Encryption. Set encryption at bucket/container creation and enforce it via policy.`,
+          index + 1,
+          'Cloud Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 49: Missing Security Groups / Firewall Rules - MEDIUM
+  const missingFirewallPatterns = [
+    { pattern: /ingress.*0\.0\.0\.0\/0/gi, name: 'Ingress from any IP' },
+    { pattern: /source_ranges\s*=\s*\["0\.0\.0\.0\/0"\]/gi, name: 'Source range 0.0.0.0/0' },
+    { pattern: /CidrIp:\s*0\.0\.0\.0\/0/gi, name: 'CIDR block open to internet' },
+    { pattern: /from_port\s*=\s*0.*to_port\s*=\s*65535/gi, name: 'All ports open' }
+  ];
+
+  lines.forEach((line, index) => {
+    missingFirewallPatterns.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'overly-permissive-firewall',
+          SEVERITY.MEDIUM,
+          'Overly Permissive Firewall Rules',
+          `Firewall/security group allows traffic from any IP (${name}). This exposes services to the entire internet, increasing attack surface. Attackers can scan for vulnerabilities, attempt brute force attacks, or exploit unpatched services.`,
+          `Restrict ingress to specific IP ranges. Use VPN or bastion hosts for admin access. Only allow 0.0.0.0/0 for public-facing services (web servers on port 80/443). Use security group references instead of CIDR blocks when possible.`,
+          index + 1,
+          'Cloud Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 50: Container Running as Root - MEDIUM
+  const containerRootPatterns = [
+    { pattern: /USER\s+root/gi, name: 'Dockerfile USER root' },
+    { pattern: /runAsUser:\s*0/gi, name: 'Kubernetes runAsUser: 0' },
+    { pattern: /privileged:\s*true/gi, name: 'Privileged container' },
+    { pattern: /--privileged/gi, name: 'Docker run --privileged' },
+    { pattern: /securityContext:.*privileged:\s*true/gi, name: 'Security context privileged' }
+  ];
+
+  lines.forEach((line, index) => {
+    containerRootPatterns.forEach(({ pattern, name }) => {
+      if (pattern.test(line) && !line.includes('runAsNonRoot')) {
+        const issue = createIssue(
+          'container-running-as-root',
+          SEVERITY.MEDIUM,
+          'Container Running as Root',
+          `Container is configured to run as root user (${name}). If the container is compromised, attackers have root privileges and can: escape the container, access host filesystem, install malware, or pivot to other containers.`,
+          `Run containers as non-root user. Dockerfile: add "USER 1000" or create a non-root user. Kubernetes: set securityContext.runAsNonRoot: true and runAsUser: 1000. Remove privileged: true unless absolutely necessary.`,
+          index + 1,
+          'Container Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 51: Exposed Docker Daemon - CRITICAL
+  const exposedDockerPatterns = [
+    { pattern: /-H\s+tcp:\/\/0\.0\.0\.0/gi, name: 'Docker daemon on 0.0.0.0' },
+    { pattern: /dockerd.*-H.*0\.0\.0\.0/gi, name: 'dockerd exposed' },
+    { pattern: /DOCKER_HOST.*tcp:\/\/[^:]+:2375/gi, name: 'Docker on port 2375 (unencrypted)' },
+    { pattern: /\/var\/run\/docker\.sock/gi, name: 'Docker socket mounted' }
+  ];
+
+  lines.forEach((line, index) => {
+    exposedDockerPatterns.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'exposed-docker-daemon',
+          SEVERITY.CRITICAL,
+          'Exposed Docker Daemon',
+          `Docker daemon is exposed (${name}). Anyone with network access can connect to Docker and: run privileged containers, access host filesystem, read secrets from all containers, or achieve full host compromise. This is a critical vulnerability.`,
+          `Never expose Docker daemon to network. Use Unix socket (/var/run/docker.sock) with proper permissions. If remote access is needed, use SSH tunneling or Docker over TLS (port 2376 with certificates). Never use -H tcp://0.0.0.0:2375.`,
+          index + 1,
+          'Container Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 52: Missing Container Resource Limits - LOW
+  const missingResourceLimits = /resources:/gi.test(code);
+  const hasLimits = /limits:/gi.test(code) && /requests:/gi.test(code);
+
+  if (missingResourceLimits && !hasLimits) {
+    const issue = createIssue(
+      'missing-resource-limits',
+      SEVERITY.LOW,
+      'Missing Container Resource Limits',
+      'Kubernetes containers lack resource limits (memory/CPU). A single container can consume all host resources, causing DoS for other containers. Attackers can exploit this by running resource-intensive operations.',
+      'Set resource requests and limits in Kubernetes manifests: resources: { requests: { memory: "128Mi", cpu: "100m" }, limits: { memory: "256Mi", cpu: "200m" } }. This prevents resource exhaustion attacks.',
+      0,
+      'Container Security'
+    );
+    issues.push(issue);
+  }
+
+  // Rule 53: Insecure Kubernetes Configurations - HIGH
+  const k8sInsecurePatterns = [
+    { pattern: /automountServiceAccountToken:\s*true/gi, name: 'Service account token auto-mounted' },
+    { pattern: /hostNetwork:\s*true/gi, name: 'Host network enabled' },
+    { pattern: /hostPID:\s*true/gi, name: 'Host PID namespace' },
+    { pattern: /hostIPC:\s*true/gi, name: 'Host IPC namespace' },
+    { pattern: /allowPrivilegeEscalation:\s*true/gi, name: 'Privilege escalation allowed' }
+  ];
+
+  lines.forEach((line, index) => {
+    k8sInsecurePatterns.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'insecure-kubernetes-config',
+          SEVERITY.HIGH,
+          'Insecure Kubernetes Configuration',
+          `Kubernetes pod has insecure configuration (${name}). This grants excessive privileges to containers, allowing attackers who compromise a pod to access the host or other pods, escalate privileges, or steal service account tokens.`,
+          `Use restrictive pod security policies. Set automountServiceAccountToken: false unless needed. Avoid hostNetwork, hostPID, hostIPC. Set allowPrivilegeEscalation: false in securityContext. Use network policies to isolate pods.`,
+          index + 1,
+          'Kubernetes Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 54: Missing Network Policies - MEDIUM
+  const hasNetworkPolicy = /kind:\s*NetworkPolicy/gi.test(code);
+  const hasK8sDeployment = /kind:\s*Deployment/gi.test(code) || /kind:\s*Pod/gi.test(code);
+
+  if (hasK8sDeployment && !hasNetworkPolicy) {
+    const issue = createIssue(
+      'missing-network-policies',
+      SEVERITY.MEDIUM,
+      'Missing Kubernetes Network Policies',
+      'Kubernetes cluster lacks network policies. By default, all pods can communicate with all other pods. If one pod is compromised, attackers can lateral-move to any other pod, access databases directly, or exfiltrate data.',
+      'Implement NetworkPolicy resources to control pod-to-pod traffic. Start with default-deny: block all traffic, then explicitly allow required connections. Use labels to define ingress/egress rules for each microservice.',
+      0,
+      'Kubernetes Security'
+    );
+    issues.push(issue);
+  }
+
+  // Rule 55: API Endpoints Without Authentication - HIGH
+  const unauthenticatedAPIPatterns = [
+    { pattern: /app\.(get|post|put|delete|patch)\s*\([^)]*\)\s*=>\s*{[^}]*res\.(?:send|json)/gi, name: 'Express route without auth middleware' },
+    { pattern: /@(Get|Post|Put|Delete|Patch)\(\)\s*(?!@UseGuards)/gi, name: 'NestJS route without guards' },
+    { pattern: /router\.(get|post|put|delete)\([^)]+function[^{]*{(?!.*authenticate)/gi, name: 'Router without authentication' },
+    { pattern: /apiRoutes\.get.*auth:\s*false/gi, name: 'Route with auth: false' }
+  ];
+
+  let unauthRouteCount = 0;
+  lines.forEach((line, index) => {
+    // Check if line looks like API route definition
+    const isRoute = /app\.(get|post|put|delete|patch)\(|router\.(get|post|put|delete|patch)\(|@(Get|Post|Put|Delete|Patch)\(/gi.test(line);
+
+    if (isRoute) {
+      // Check next few lines for authentication middleware
+      const nextLines = lines.slice(index, Math.min(index + 5, lines.length)).join('\n');
+      const hasAuth = /authenticate|requireAuth|isAuthenticated|@UseGuards|@Auth|protect|authorize/gi.test(nextLines);
+
+      if (!hasAuth && unauthRouteCount < 3) {  // Limit reports to avoid spam
+        unauthRouteCount++;
+        const issue = createIssue(
+          'api-without-authentication',
+          SEVERITY.HIGH,
+          'API Endpoint Without Authentication',
+          'API route is defined without authentication middleware. Anyone can access this endpoint and potentially: read sensitive data, modify resources, trigger expensive operations, or exploit business logic vulnerabilities.',
+          'Add authentication middleware to all routes that should be protected. Express: app.use(authenticate); or per-route: app.get("/api/data", authenticate, handler). Use JWT, OAuth, or session-based auth. Only public endpoints (login, signup, health checks) should be unauthenticated.',
+          index + 1,
+          'API Security'
+        );
+        issues.push(issue);
+      }
+    }
+  });
+
+  // Rule 56: Missing Rate Limiting - MEDIUM
+  const hasRateLimiting = /rateLimit|rate-limit|express-rate-limit|slowDown|limiter/gi.test(code);
+  const hasAPIRoutes = /app\.(get|post|put|delete|patch)|router\.(get|post|put|delete)/gi.test(code);
+
+  if (hasAPIRoutes && !hasRateLimiting) {
+    const issue = createIssue(
+      'missing-rate-limiting',
+      SEVERITY.MEDIUM,
+      'Missing Rate Limiting',
+      'API lacks rate limiting. Attackers can: brute force authentication, scrape all data via rapid requests, cause DoS by overwhelming the server, or abuse expensive operations. Public APIs are especially vulnerable.',
+      'Implement rate limiting middleware. Express: use express-rate-limit. Set limits based on IP address: { windowMs: 15 * 60 * 1000, max: 100 }. Use stricter limits for auth endpoints. Consider using Redis for distributed rate limiting.',
+      0,
+      'API Security'
+    );
+    issues.push(issue);
+  }
+
+  // Rule 57: CORS Misconfiguration - MEDIUM
+  const corsMisconfigurations = [
+    { pattern: /Access-Control-Allow-Origin:\s*\*/gi, name: 'CORS wildcard origin' },
+    { pattern: /cors\(\{\s*origin:\s*\*\s*\}\)/gi, name: 'CORS origin: *' },
+    { pattern: /cors\(\{\s*origin:\s*true\s*\}\)/gi, name: 'CORS origin: true (reflects any)' },
+    { pattern: /"Access-Control-Allow-Credentials":\s*"true".*"Access-Control-Allow-Origin":\s*"\*"/gi, name: 'CORS credentials with wildcard' }
+  ];
+
+  lines.forEach((line, index) => {
+    corsMisconfigurations.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'cors-misconfiguration',
+          SEVERITY.MEDIUM,
+          'CORS Misconfiguration',
+          `CORS is misconfigured (${name}). Allows any website to make requests to your API with user credentials. Attackers can create malicious websites that steal user data, perform actions on behalf of users, or extract sensitive information via cross-origin requests.`,
+          'Use specific origins: cors({ origin: "https://yourapp.com" }). For multiple origins, use a whitelist. Never combine "Access-Control-Allow-Credentials: true" with "Access-Control-Allow-Origin: *". Validate origin dynamically if needed.',
+          index + 1,
+          'API Security'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 58: Infrastructure as Code Secrets - HIGH
+  const iacSecretPatterns = [
+    { pattern: /password\s*=\s*["'][^"']+["']/gi, name: 'Hardcoded password in IaC' },
+    { pattern: /secret\s*=\s*["'][^"']+["']/gi, name: 'Hardcoded secret in IaC' },
+    { pattern: /token\s*=\s*["'][^"']+["']/gi, name: 'Hardcoded token in IaC' },
+    { pattern: /master_password\s*=\s*["'][^"']+["']/gi, name: 'Database master password' },
+    { pattern: /admin_password\s*=\s*["'][^"']+["']/gi, name: 'Admin password in IaC' }
+  ];
+
+  // Only check in IaC files (Terraform, CloudFormation, etc.)
+  const isIaCFile = /terraform|\.tf|cloudformation|\.yaml|\.yml/gi.test(code) ||
+                     /resource\s+"aws_|resource\s+"google_|resource\s+"azurerm_/gi.test(code);
+
+  if (isIaCFile) {
+    lines.forEach((line, index) => {
+      iacSecretPatterns.forEach(({ pattern, name }) => {
+        // Skip if it's using a variable reference
+        if (pattern.test(line) && !line.includes('var.') && !line.includes('${') &&
+            !line.trim().startsWith('#') && !line.trim().startsWith('//')) {
+          const issue = createIssue(
+            'iac-hardcoded-secrets',
+            SEVERITY.HIGH,
+            'Secrets in Infrastructure as Code',
+            `Infrastructure code contains hardcoded secrets (${name}). IaC files are committed to version control, making secrets accessible to anyone with repo access. Even if deleted later, secrets remain in git history forever.`,
+            'Use variables and secret management. Terraform: use variables with sensitive = true, store values in .tfvars (gitignored) or environment variables. CloudFormation: use AWS Secrets Manager or Parameter Store. Never commit secrets to IaC files.',
+            index + 1,
+            'Infrastructure Security'
+          );
+          issues.push(issue);
+        }
+      });
+    });
+  }
+
+  // Add all issues to results
+  issues.forEach(issue => {
+    if (issue.severity === 'CRITICAL') {
+      results.critical.push(issue);
+    } else if (issue.severity === 'HIGH') {
+      results.high.push(issue);
+    } else if (issue.severity === 'MEDIUM') {
+      results.medium.push(issue);
+    } else {
+      results.low.push(issue);
+    }
+    results.allIssues.push(issue);
+  });
+
+  results.stats.rulesChecked += 13; // Rules 46-58
+}
+
 // Helper function to get beginner-friendly explanations
 export function getBeginnerExplanation(issueId) {
   const explanations = {
@@ -2311,6 +2664,84 @@ export function getBeginnerExplanation(issueId) {
       impact: 'In long-running SPAs, memory grows until the browser slows down or crashes. Users have to refresh the page periodically to clear memory.',
       analogy: 'Like never emptying your trash can - eventually garbage overflows and your house becomes unlivable.',
       fix: 'Avoid global state for accumulating data. Use component state, implement pagination, or clean up old data. For large lists, use virtualization (react-window) to only render visible items.'
+    },
+    'exposed-cloud-credentials': {
+      what: 'Your code or config files have hardcoded AWS/GCP/Azure credentials. These are like master keys to your entire cloud infrastructure.',
+      impact: 'Anyone who sees your code can access your cloud account: delete databases, steal data, create expensive resources ($10,000+ bills), or hold your infrastructure for ransom. Capital One breach (2019) resulted from stolen AWS credentials.',
+      analogy: 'Like posting your house keys, safe combination, and security system code on social media for everyone to see.',
+      fix: 'Use environment variables: process.env.AWS_ACCESS_KEY_ID. Better: use IAM roles (AWS), Service Accounts (GCP), or Managed Identity (Azure) - no credentials needed in code at all!'
+    },
+    'overly-permissive-iam': {
+      what: 'Your cloud IAM policy grants "Action: *" or "Resource: *" - unlimited permissions. Like giving someone a master key instead of specific room keys.',
+      impact: 'If these credentials leak, attackers can do ANYTHING: delete production databases, shut down servers, steal all data, rack up $100,000+ cloud bills, or use your account for cryptocurrency mining.',
+      analogy: 'Like hiring a janitor but giving them CEO privileges, building access, financial authority, and data deletion rights. They only need to empty trash!',
+      fix: 'Grant minimum permissions. Instead of "Action: *", list specific actions: ["s3:GetObject", "s3:PutObject"]. Instead of "Resource: *", specify exact ARNs: "arn:aws:s3:::my-bucket/*".'
+    },
+    'unencrypted-cloud-storage': {
+      what: 'Your S3 bucket, GCS bucket, or Azure blob storage is not encrypted. Data is stored in plaintext on cloud provider\'s disks.',
+      impact: 'If someone gains physical access to storage hardware, or your cloud account is compromised, they can read all data. This violates GDPR, HIPAA, and PCI-DSS. Fines can be millions of dollars.',
+      analogy: 'Like storing all your customer data on USB drives labeled "CONFIDENTIAL" but the drives aren\'t password protected - anyone who finds them can read everything.',
+      fix: 'Enable encryption at rest. AWS S3: enable default encryption with AES-256 or KMS. GCP: enable Google-managed or customer-managed encryption. Azure: enable Storage Service Encryption (SSE).'
+    },
+    'overly-permissive-firewall': {
+      what: 'Your firewall/security group allows inbound traffic from 0.0.0.0/0 (any IP on the internet) on all ports or sensitive ports like SSH.',
+      impact: 'Exposes servers to the entire internet. Attackers can: brute force SSH passwords, exploit unpatched vulnerabilities, or find misconfigured services. WannaCry ransomware (2017) spread by scanning for exposed SMB ports.',
+      analogy: 'Like leaving all doors and windows of your house unlocked 24/7, with a sign saying "come on in, everyone\'s welcome!"',
+      fix: 'Restrict to specific IPs: use your office/home IP range. For SSH: use VPN or bastion host. Only allow 0.0.0.0/0 for public services (HTTP/HTTPS on ports 80/443). Use security group references instead of IP ranges.'
+    },
+    'container-running-as-root': {
+      what: 'Your Docker container runs as root user (UID 0). If the container is compromised, attackers have superuser privileges.',
+      impact: 'Attackers can: break out of container to host system, access other containers\' data, install rootkits, or achieve full system compromise. Many container escapes require root privileges.',
+      analogy: 'Like running a restaurant where every employee has the owner\'s master key and safe code - one bad employee and everything is at risk.',
+      fix: 'Run as non-root. Dockerfile: add "USER 1000" or create specific user. Kubernetes: set securityContext.runAsNonRoot: true and runAsUser: 1000. Remove "privileged: true".'
+    },
+    'exposed-docker-daemon': {
+      what: 'Your Docker daemon is exposed on a network port (usually 2375) without authentication. Anyone can connect and control Docker.',
+      impact: 'Remote attackers can: run privileged containers, mount host filesystem, extract secrets from all containers, or achieve complete host takeover. This is as bad as giving strangers SSH root access.',
+      analogy: 'Like putting a control panel for your entire building (electricity, security, locks, safes) on the street with no password - anyone can walk up and control everything.',
+      fix: 'NEVER expose Docker daemon to network. Use Unix socket (/var/run/docker.sock) with limited access. If remote access needed: use SSH tunneling or Docker over TLS (port 2376 with client certificates).'
+    },
+    'missing-resource-limits': {
+      what: 'Your Kubernetes pods don\'t have CPU/memory limits set. One container can consume all available resources.',
+      impact: 'Resource exhaustion attack: malicious or buggy container uses all CPU/memory, starving other containers. Legitimate services crash. Attackers can cause DoS by consuming infinite resources.',
+      analogy: 'Like an all-you-can-eat buffet where one person can take ALL the food, leaving nothing for anyone else.',
+      fix: 'Set resource requests and limits: resources: { requests: { memory: "128Mi", cpu: "100m" }, limits: { memory: "256Mi", cpu: "200m" }}. Prevents single container from consuming all resources.'
+    },
+    'insecure-kubernetes-config': {
+      what: 'Your Kubernetes pod has dangerous settings like hostNetwork: true, privileged: true, or automountServiceAccountToken: true.',
+      impact: 'Compromised pod can: access host network (bypass network policies), read service account tokens (access Kubernetes API), or escalate privileges. Attackers can spread from one pod to entire cluster.',
+      analogy: 'Like giving a hotel guest access to the maintenance tunnels, master key, security camera footage, and employee-only areas - way more access than needed.',
+      fix: 'Disable dangerous features: automountServiceAccountToken: false, hostNetwork: false, allowPrivilegeEscalation: false. Use Pod Security Standards to enforce policies cluster-wide.'
+    },
+    'missing-network-policies': {
+      what: 'Your Kubernetes cluster has no NetworkPolicy resources. By default, all pods can talk to all other pods - zero network segmentation.',
+      impact: 'If one microservice is compromised, attackers can: directly access databases, communicate with any other service, exfiltrate data, or lateral-move across the entire cluster. No defense in depth.',
+      analogy: 'Like an apartment building where every unit\'s door is always unlocked and anyone can walk into any apartment - no boundaries or privacy.',
+      fix: 'Implement NetworkPolicy resources. Start with default-deny, then whitelist required connections: deny all traffic by default, then allow web → API → database flows explicitly using pod labels.'
+    },
+    'api-without-authentication': {
+      what: 'Your API endpoint has no authentication middleware. Anyone on the internet can access it without logging in or proving identity.',
+      impact: 'Data breaches, unauthorized actions, resource abuse. Attackers can: steal user data, modify records, trigger expensive operations, or scrape your entire database. Many breaches start with unauthenticated APIs.',
+      analogy: 'Like a bank vault with the door wide open and no security guards - anyone can walk in and take money.',
+      fix: 'Add authentication middleware to all protected routes. Express: app.get("/api/data", authenticate, handler). Use JWT, OAuth, or session-based auth. Only public endpoints (login, health check) should be unauthenticated.'
+    },
+    'missing-rate-limiting': {
+      what: 'Your API has no rate limiting. Users can make unlimited requests per second.',
+      impact: 'Attackers can: brute force passwords (try millions of combinations), scrape all data via rapid requests, or overwhelm server causing DoS. Reddit, GitHub, Twitter all had issues before implementing rate limits.',
+      analogy: 'Like a store with no purchase limits - one person can buy your entire inventory in 5 minutes, leaving nothing for anyone else.',
+      fix: 'Use rate limiting middleware. Express: const limiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }); app.use(limiter). Set stricter limits for auth endpoints (5-10 attempts per minute).'
+    },
+    'cors-misconfiguration': {
+      what: 'Your API allows CORS from any origin (Access-Control-Allow-Origin: *) while accepting credentials. Any website can make requests with user cookies.',
+      impact: 'Attackers create malicious websites that make API requests on behalf of logged-in users: steal data, perform actions, transfer money, or change settings. Users don\'t even know it\'s happening.',
+      analogy: 'Like giving a stranger permission to use your credit card and signature - they can make purchases pretending to be you.',
+      fix: 'Use specific origins: cors({ origin: "https://yourapp.com", credentials: true }). NEVER combine credentials: true with origin: *. Validate origins against whitelist.'
+    },
+    'iac-hardcoded-secrets': {
+      what: 'Your Terraform/CloudFormation files have hardcoded passwords or secrets. Infrastructure as Code files are committed to git, so secrets are in version control forever.',
+      impact: 'Anyone with repo access sees secrets. Even if deleted, secrets remain in git history. Attackers can: access databases, modify infrastructure, or steal data. Uber breach (2016) started with AWS keys in GitHub.',
+      analogy: 'Like writing all your passwords in a notebook and passing it around the office - everyone can read and copy them.',
+      fix: 'Use variables with secret management. Terraform: define variables with sensitive = true, store values in .tfvars (gitignored). Use AWS Secrets Manager, HashiCorp Vault, or Azure Key Vault for secrets.'
     }
   };
 
