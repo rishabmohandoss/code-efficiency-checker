@@ -71,6 +71,7 @@ export function runSecurityAnalysis(code, language = 'javascript') {
   detectEnvironmentVariables(code, lines, results, language);
   detectConfigurationIssues(code, lines, results, language);
   detectDependencyIssues(code, lines, results, language);
+  detectCICDIssues(code, lines, results, language);
 
   // Calculate final stats
   results.stats.critical = results.critical.length;
@@ -1540,6 +1541,268 @@ function detectDependencyIssues(code, lines, results, language) {
   results.stats.rulesChecked += 5; // Rules 41-45
 }
 
+/**
+ * Category 8: CI/CD Security (Rules 63-66)
+ */
+function detectCICDIssues(code, lines, results, language) {
+  const issues = [];
+
+  // Detect if this is CI/CD configuration file or contains CI/CD code
+  const isCIConfig = code.includes('.github/workflows') ||
+                     code.includes('.gitlab-ci.yml') ||
+                     code.includes('.travis.yml') ||
+                     code.includes('Jenkinsfile') ||
+                     code.includes('azure-pipelines') ||
+                     code.includes('circle') ||
+                     code.includes('GITHUB_TOKEN') ||
+                     code.includes('CI=true') ||
+                     /\$\{\{\s*secrets\./gi.test(code) ||
+                     /\$\{\{\s*env\./gi.test(code);
+
+  // Rule 63: Secrets in CI/CD Logs - CRITICAL
+  const secretLoggingPatterns = [
+    /echo\s+["']?\$\{?\{?\s*secrets\./gi,
+    /echo\s+["']?\$\w*(?:SECRET|PASSWORD|TOKEN|KEY)/gi,
+    /console\.log\s*\(\s*process\.env\.(?:SECRET|PASSWORD|TOKEN|KEY)/gi,
+    /print\s*\(\s*os\.getenv\s*\(\s*['"](?:SECRET|PASSWORD|TOKEN|KEY)/gi,
+    /echo\s+["']?\$(?:API_KEY|SECRET_KEY|PASSWORD)/gi,
+    /\$\{\{\s*secrets\.\w+\s*\}\}\s*>>/gi  // Secrets written to files
+  ];
+
+  lines.forEach((line, index) => {
+    secretLoggingPatterns.forEach(pattern => {
+      if (pattern.test(line)) {
+        // Skip if it's a comment or explicitly masked
+        if (line.trim().startsWith('#') || line.trim().startsWith('//') || line.includes('***')) {
+          return;
+        }
+
+        const issue = createIssue(
+          'secrets-in-ci-logs',
+          SEVERITY.CRITICAL,
+          'Secrets Exposed in CI/CD Logs',
+          'Your CI/CD configuration prints secrets to logs using echo, console.log, or similar commands. CI/CD logs are often publicly accessible (especially on public repos) and are stored indefinitely. Anyone with access to build logs can see your secrets in plain text.',
+          'Never echo or log secrets. If you need to verify they exist, use: echo "Secret is set" instead of echo $SECRET. For GitHub Actions, secrets are automatically masked UNLESS you explicitly print them. Remove all echo/console.log statements that output ${{ secrets.* }} or environment variables containing secrets.',
+          index + 1,
+          'CI/CD'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Additional check: Detecting secrets passed to commands that might log them
+  const dangerousCommandPatterns = [
+    /curl.*\$\{?\{?\s*secrets\./gi,
+    /wget.*\$\{?\{?\s*secrets\./gi,
+    /git\s+clone.*\$\{?\{?\s*secrets\./gi,
+    /npm\s+publish.*\$\{?\{?\s*secrets\./gi
+  ];
+
+  lines.forEach((line, index) => {
+    dangerousCommandPatterns.forEach(pattern => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'secrets-in-command-args',
+          SEVERITY.HIGH,
+          'Secrets in Command Arguments',
+          'Secrets are being passed as command-line arguments (curl, wget, git, etc.). Command arguments are often logged by the shell, process monitors, and system audit logs. This exposes secrets even if your CI logs are private.',
+          'Pass secrets via environment variables or stdin instead of command arguments. For curl: use -H "Authorization: Bearer $TOKEN" with TOKEN as env var. For git: use credential helpers. For npm: use .npmrc with environment variables.',
+          index + 1,
+          'CI/CD'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 64: Unverified Dependencies in CI - HIGH
+  const unsafeInstallPatterns = [
+    /npm\s+install(?!\s+--frozen-lockfile)(?!\s+-g)(?!\s+--ignore-scripts)/gi,
+    /yarn\s+install(?!\s+--frozen-lockfile)(?!\s+--immutable)/gi,
+    /pip\s+install(?!\s+-r\s+requirements\.txt)/gi,
+    /pip\s+install(?!.*--require-hashes)/gi,
+    /composer\s+install(?!\s+--no-scripts)/gi,
+    /bundle\s+install(?!\s+--frozen)/gi
+  ];
+
+  if (isCIConfig) {
+    lines.forEach((line, index) => {
+      // Skip comments
+      if (line.trim().startsWith('#') || line.trim().startsWith('//')) {
+        return;
+      }
+
+      unsafeInstallPatterns.forEach(pattern => {
+        if (pattern.test(line)) {
+          const issue = createIssue(
+            'unverified-dependencies-ci',
+            SEVERITY.HIGH,
+            'Unverified Dependencies in CI Pipeline',
+            'Your CI pipeline installs dependencies without verifying exact versions from lock files. This means builds can get different versions at different times, leading to supply chain attacks where malicious code is installed after your last test. Attackers can compromise packages between your dev testing and production deployment.',
+            'Use lock file verification in CI: npm ci (not npm install), yarn install --frozen-lockfile, pip install --require-hashes. These commands fail if lock file doesn\'t match package.json, ensuring reproducible builds and preventing supply chain attacks.',
+            index + 1,
+            'CI/CD'
+          );
+          issues.push(issue);
+        }
+      });
+    });
+  }
+
+  // Check for downloading and executing remote scripts
+  const remoteScriptPatterns = [
+    /curl.*\|\s*(?:bash|sh|python)/gi,
+    /wget.*-O-.*\|\s*(?:bash|sh|python)/gi,
+    /curl.*-s.*\|\s*sudo\s+(?:bash|sh)/gi,
+    /\|\s*sh\s*$/gm
+  ];
+
+  lines.forEach((line, index) => {
+    remoteScriptPatterns.forEach(pattern => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'remote-script-execution',
+          SEVERITY.HIGH,
+          'Downloading and Executing Remote Scripts',
+          'Your CI pipeline downloads and immediately executes scripts from the internet (curl | bash). If the source is compromised or hijacked, malicious code runs in your CI with full access to your secrets, code, and deployment credentials. This is a common supply chain attack vector.',
+          'Never pipe downloads directly to bash/sh. Download first, verify integrity (checksum/signature), then execute. Example: curl -o script.sh URL && sha256sum -c script.sh.checksum && bash script.sh. Better: vendor scripts in your repo or use official Docker images.',
+          index + 1,
+          'CI/CD'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 65: Missing Security Scans in Pipeline - MEDIUM
+  if (isCIConfig) {
+    const hasSecurityScan = /npm\s+audit/gi.test(code) ||
+                           /yarn\s+audit/gi.test(code) ||
+                           /snyk\s+test/gi.test(code) ||
+                           /trivy/gi.test(code) ||
+                           /safety\s+check/gi.test(code) ||  // Python
+                           /bandit/gi.test(code) ||  // Python
+                           /gosec/gi.test(code) ||  // Go
+                           /brakeman/gi.test(code) ||  // Ruby
+                           /semgrep/gi.test(code) ||
+                           /dependabot/gi.test(code) ||
+                           /codeql/gi.test(code) ||
+                           /SAST|DAST|security.*scan/gi.test(code);
+
+    const hasBuildStep = /npm\s+(run\s+)?build/gi.test(code) ||
+                        /yarn\s+(run\s+)?build/gi.test(code) ||
+                        /mvn\s+package/gi.test(code) ||
+                        /gradle\s+build/gi.test(code) ||
+                        /make\s+build/gi.test(code) ||
+                        /docker\s+build/gi.test(code);
+
+    if (hasBuildStep && !hasSecurityScan) {
+      const issue = createIssue(
+        'missing-security-scans',
+        SEVERITY.MEDIUM,
+        'Missing Security Scans in CI Pipeline',
+        'Your CI pipeline builds and potentially deploys code without running security scans. Vulnerabilities, secrets, and security issues can reach production undetected. Security scans in CI are your last line of defense before deployment.',
+        'Add security scanning to your CI pipeline: 1) npm audit or yarn audit for dependencies, 2) Snyk or Dependabot for vulnerability scanning, 3) Semgrep or CodeQL for SAST (static analysis), 4) Git-secrets or TruffleHog for secret scanning. Run these before build/deploy steps and fail the build on critical issues.',
+        null,
+        'CI/CD'
+      );
+      results.medium.push(issue);
+      results.allIssues.push(issue);
+    }
+  }
+
+  // Rule 66: Overly Permissive CI Tokens - HIGH
+  const broadPermissionPatterns = [
+    /permissions:\s*write-all/gi,
+    /permissions:\s*[^\n]*:\s*write[^\n]*:\s*write/gi,  // Multiple write permissions
+    /GITHUB_TOKEN.*with:\s*repo/gi,
+    /token:\s*\$\{\{\s*secrets\.GITHUB_TOKEN\s*\}\}/gi
+  ];
+
+  if (isCIConfig && code.includes('GITHUB_TOKEN')) {
+    lines.forEach((line, index) => {
+      broadPermissionPatterns.forEach(pattern => {
+        if (pattern.test(line)) {
+          const issue = createIssue(
+            'overly-permissive-ci-token',
+            SEVERITY.HIGH,
+            'Overly Permissive CI Token Permissions',
+            'Your CI workflow uses broad permissions (write-all or multiple write scopes) for the GitHub token. If the workflow is compromised or a malicious dependency runs in CI, it can modify your code, create releases, access secrets, or take over your repository.',
+            'Use minimal permissions principle: Only grant specific permissions needed. Example: permissions: { contents: read, pull-requests: write }. Avoid write-all. For GitHub Actions, default GITHUB_TOKEN has limited permissions. Only escalate when absolutely necessary and document why.',
+            index + 1,
+            'CI/CD'
+          );
+          issues.push(issue);
+        }
+      });
+    });
+  }
+
+  // Check for tokens with full repo access being used broadly
+  const fullAccessPatterns = [
+    /secrets\.(?!GITHUB_TOKEN)[A-Z_]*TOKEN/gi,
+    /secrets\.(?!GITHUB_TOKEN)[A-Z_]*KEY/gi
+  ];
+
+  if (isCIConfig) {
+    lines.forEach((line, index) => {
+      fullAccessPatterns.forEach(pattern => {
+        const matches = line.match(pattern);
+        if (matches && matches.length > 2) {  // Multiple different tokens used
+          const issue = createIssue(
+            'multiple-powerful-tokens',
+            SEVERITY.MEDIUM,
+            'Multiple Powerful Tokens in CI',
+            'Your CI workflow uses multiple different tokens/keys. Each token is a potential attack vector. If any step in your workflow is compromised (malicious dependency, typosquatting), all tokens are exposed.',
+            'Minimize the number of tokens used in CI. Use the default GITHUB_TOKEN when possible. For external services, create service-specific tokens with minimal permissions. Use separate workflows for different permission levels rather than one workflow with many tokens.',
+            index + 1,
+            'CI/CD'
+          );
+          issues.push(issue);
+        }
+      });
+    });
+  }
+
+  // Check for running CI on pull requests from forks (security risk)
+  if (isCIConfig) {
+    const hasExternalPRTrigger = /pull_request_target/gi.test(code) ||
+                                 /on:.*pull_request.*external/gi.test(code);
+    const hasSecretsInPR = /pull_request/.test(code) && /secrets\./gi.test(code);
+
+    if (hasExternalPRTrigger || hasSecretsInPR) {
+      const issue = createIssue(
+        'secrets-exposed-to-forks',
+        SEVERITY.CRITICAL,
+        'Secrets Accessible to Fork Pull Requests',
+        'Your workflow runs on pull_request_target or exposes secrets to PRs from forks. Attackers can create a pull request from a forked repo with malicious code that steals your secrets. This is a critical GitHub Actions security issue that has led to many compromises.',
+        'Never use pull_request_target with secrets unless you thoroughly validate PR code first. Use pull_request instead (doesn\'t expose secrets to forks). If you must use pull_request_target: 1) Checkout the base branch, not PR branch, 2) Validate PR changes before running them, 3) Use a separate workflow without secrets for PRs.',
+        null,
+        'CI/CD'
+      );
+      results.critical.push(issue);
+      results.allIssues.push(issue);
+    }
+  }
+
+  // Add all CI/CD issues
+  issues.forEach(issue => {
+    if (issue.severity === SEVERITY.CRITICAL) {
+      results.critical.push(issue);
+    } else if (issue.severity === SEVERITY.HIGH) {
+      results.high.push(issue);
+    } else if (issue.severity === SEVERITY.MEDIUM) {
+      results.medium.push(issue);
+    } else if (issue.severity === SEVERITY.LOW) {
+      results.low.push(issue);
+    }
+    results.allIssues.push(issue);
+  });
+
+  results.stats.rulesChecked += 4; // Rules 63-66
+}
+
 // Helper function to get beginner-friendly explanations
 export function getBeginnerExplanation(issueId) {
   const explanations = {
@@ -1632,6 +1895,42 @@ export function getBeginnerExplanation(issueId) {
       impact: 'Critical vulnerabilities can lead to remote code execution - hackers can take complete control of your server. High severity issues can leak data or crash your app.',
       analogy: 'Like a security guard telling you "there\'s a known burglar hiding in your house" - you need to act immediately, not ignore it.',
       fix: 'Fix immediately: Run npm audit fix to update packages. Review each CVE to understand the risk. Test your app after updates. For unfixable issues, consider alternative packages.'
+    },
+    'secrets-in-ci-logs': {
+      what: 'Your CI/CD pipeline prints secrets to build logs using echo, console.log, or print. CI logs are often public (on GitHub) and stored forever.',
+      impact: 'Anyone can read your build logs and steal your API keys, passwords, and deployment credentials. On public repos, this means the entire internet can see your secrets. CodeCov breach (2021) happened partly because credentials were in logs.',
+      analogy: 'Like shouting your password out loud in a crowded room and recording it on video that stays online forever.',
+      fix: 'Never echo or log secrets. To verify they exist, use: echo "Secret is set" instead of echo $SECRET. GitHub Actions automatically masks secrets UNLESS you explicitly print them. Remove all echo/console.log of ${{ secrets.* }}.'
+    },
+    'unverified-dependencies-ci': {
+      what: 'Your CI pipeline uses "npm install" instead of "npm ci". This means it can install different package versions each time it runs.',
+      impact: 'Between your last test and production deployment, a package can be compromised with malware (supply chain attack). Your build will install the malicious version and deploy it to production. event-stream attack (2018) happened this way.',
+      analogy: 'Like testing a cake recipe with one batch of flour, but using a different (possibly poisoned) batch when making it for customers.',
+      fix: 'Use npm ci instead of npm install in CI/CD. npm ci fails if package-lock.json doesn\'t match package.json, ensuring exact versions. For yarn: yarn install --frozen-lockfile. For pip: pip install --require-hashes.'
+    },
+    'missing-security-scans': {
+      what: 'Your CI pipeline builds and deploys code without running any security scans (npm audit, Snyk, CodeQL, etc.). Vulnerabilities reach production undetected.',
+      impact: 'You\'re deploying blind - no idea if you have security holes, leaked secrets, or vulnerable dependencies. Security scans are your last defense before production.',
+      analogy: 'Like a factory shipping products without quality control - defective and dangerous items go straight to customers.',
+      fix: 'Add security scanning to CI: 1) npm audit for dependencies, 2) Snyk/Dependabot for vulnerabilities, 3) Semgrep/CodeQL for code analysis, 4) TruffleHog for secrets. Fail builds on critical issues.'
+    },
+    'overly-permissive-ci-token': {
+      what: 'Your CI workflow uses tokens with "write-all" or too many permissions. If a malicious dependency runs in CI, it can do anything to your repo.',
+      impact: 'Compromised CI (malicious package, typosquatting) can modify your code, create releases, steal secrets, or take over your entire repository. GitHub Actions supply chain attacks exploit this.',
+      analogy: 'Like giving a delivery person the keys to your house, safe, and car - they only need to drop off a package, not access everything.',
+      fix: 'Use minimal permissions: only grant what\'s needed. Example: permissions: { contents: read, pull-requests: write }. Avoid write-all. Default GITHUB_TOKEN has limited permissions - only escalate when necessary.'
+    },
+    'secrets-exposed-to-forks': {
+      what: 'Your workflow uses "pull_request_target" or exposes secrets to pull requests from forks. Attackers can create a PR with malicious code that steals your secrets.',
+      impact: 'Anyone can fork your repo, add malicious code to steal secrets, and submit a PR. Your CI runs their code with your secrets. This is how many GitHub repos have been compromised.',
+      analogy: 'Like letting strangers walk into your house (fork), and you hand them your safe keys (secrets) before checking who they are.',
+      fix: 'Never use pull_request_target with secrets. Use pull_request instead (doesn\'t expose secrets to forks). If you must: 1) Checkout base branch, not PR branch, 2) Validate PR changes first, 3) Use separate workflow without secrets for PRs.'
+    },
+    'remote-script-execution': {
+      what: 'Your CI downloads scripts from the internet and immediately runs them (curl | bash). If the source is compromised, malicious code runs with full access to your secrets.',
+      impact: 'The source website can be hacked or hijacked. The script can steal your deployment credentials, inject backdoors, or compromise your entire infrastructure. This is a common supply chain attack.',
+      analogy: 'Like a stranger saying "close your eyes and drink this" - you have no idea what you\'re consuming until it\'s too late.',
+      fix: 'Never pipe downloads to bash. Download first, verify integrity (checksum), then execute: curl -o script.sh URL && sha256sum -c checksum && bash script.sh. Better: vendor scripts in your repo or use official Docker images.'
     }
   };
 
