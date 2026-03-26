@@ -1,0 +1,27 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Map CSS variables to Tailwind v4 theme utilities */
+@theme inline {
+  --color-primary: var(--primary);
+  --color-foreground: var(--foreground);
+  --color-border: var(--border);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-background: var(--background);
+}
+
+:root {
+  --primary: oklch(0.85 0.15 55);
+  --foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.12);
+  --muted-foreground: #9ca3af;
+  --background: #0a0a12;
+}
+
+.dark {
+  --primary: oklch(0.85 0.15 55);
+  --foreground: #ffffff;
+  --border: rgba(255, 255, 255, 0.12);
+  --muted-foreground: #9ca3af;
+  --background: #0a0a12;
+}

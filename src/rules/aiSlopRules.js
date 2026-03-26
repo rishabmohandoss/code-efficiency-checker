@@ -154,7 +154,10 @@ export const aiSlopRules = [
 
       const checkParams = (match) => {
         if (!match || !match[1]) return false;
-        const params = match[1].split(',').map(p => p.trim()).filter(p => p.length > 0);
+        const paramStr = match[1].trim();
+        // Destructured object/array as single parameter — this is the recommended fix, not a problem
+        if (paramStr.startsWith('{') || paramStr.startsWith('[')) return false;
+        const params = paramStr.split(',').map(p => p.trim()).filter(p => p.length > 0);
         return params.length > 5;
       };
 

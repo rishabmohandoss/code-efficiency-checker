@@ -1,12 +1,11 @@
 import { useState, useRef, useCallback, useEffect } from "react";
 import { jsPDF } from "jspdf";
-import * as THREE from "three";
+import p5 from "p5";
 import TOPOLOGY from "vanta/dist/vanta.topology.min";
 import { RULES } from './rules/index.js';
 
-// Make THREE available globally for Vanta.js
-if (typeof window !== 'undefined') {
-  window.THREE = THREE;
+if (typeof window !== "undefined") {
+  window.p5 = p5;
 }
 import {
   SEVERITY,
@@ -21,6 +20,8 @@ import {
   PLACEHOLDER
 } from './config/constants.js';
 import { cleanLines, detectIndentSize, nestingDepthFactory, hasNestedLoops, hasLinearScanInLoop, maxLoopDepth } from './utils/codeAnalysis.js';
+import { runAnalysis } from './analysis/engine.js';
+import { TextScramble } from './components/ui/text-scramble.jsx';
 import { EXAMPLE_LIST } from './utils/examples.js';
 import { getBeginnerExplanation, calculateImpactScore } from './utils/beginnerExplanations.js';
 
@@ -35,113 +36,7 @@ import { getBeginnerExplanation, calculateImpactScore } from './utils/beginnerEx
 
 // ── Original RULES array removed (now in src/rules/) ─────────────────────────
 
-// ── Run engine ────────────────────────────────────────────────────────────────
-function runAnalysis(code, language) {
-  const rawLines = code.split("\n");
-  const lines = cleanLines(rawLines);
-  const flags = [];
-  const passed = [];
-
-  // Detect indentation and create nestingDepth function
-  const indentSize = detectIndentSize(rawLines);
-  const nestingDepth = nestingDepthFactory(indentSize);
-
-  // --- 1. SINGLE PASS ARCHITECTURE (Fixes O(n³)) ---
-  // We scan the file exactly ONCE to check all loop-related rules.
-  const loopRx = /\b(for|while|forEach)\b/;
-  let inLoop = false;
-  let currentLoopDepth = 0;
-  const triggeredRuleIds = new Set();
-
-  for (const line of lines) {
-    const d = nestingDepth(line);
-
-    // Start tracking loop
-    if (loopRx.test(line)) {
-      inLoop = true;
-      currentLoopDepth = d;
-    }
-
-    // Check for issues inside loop (must be at greater depth)
-    if (inLoop && d > currentLoopDepth) {
-      if (!triggeredRuleIds.has("linear-scan-in-loop") && /\.(includes|indexOf|find|filter|some|every|search)\s*\(/.test(line)) {
-        triggeredRuleIds.add("linear-scan-in-loop");
-      }
-      if (!triggeredRuleIds.has("alloc-in-loop") && /new\s+(Array|Object|Map|Set|Date|\w+)\s*\(|=\s*\[\]|=\s*\{\}/.test(line)) {
-        triggeredRuleIds.add("alloc-in-loop");
-      }
-      if (!triggeredRuleIds.has("sort-in-loop") && /\.sort\s*\(|sorted\s*\(|Collections\.sort/.test(line)) {
-        triggeredRuleIds.add("sort-in-loop");
-      }
-      if (!triggeredRuleIds.has("async-in-loop") && /\bawait\b/.test(line)) {
-        triggeredRuleIds.add("async-in-loop");
-      }
-      if (!triggeredRuleIds.has("dom-in-loop") && /document\.(getElementById|querySelector|createElement|appendChild)|\.innerHTML|\.classList\./.test(line)) {
-        triggeredRuleIds.add("dom-in-loop");
-      }
-    }
-
-    // Exit loop tracking when depth drops below loop level
-    // This means we've moved to code outside the loop
-    if (inLoop && d < currentLoopDepth) {
-      // Make sure we're not just on an empty line or a line with only whitespace
-      // We want to exit when we hit actual code at a lower depth OR a closing brace
-      const trimmed = line.trim();
-      if (trimmed.length > 0) {
-        inLoop = false;
-      }
-    }
-  }
-
-  // --- 2. EVALUATE RULES ---
-  for (const rule of RULES) {
-    if (rule.languages !== "*" && !rule.languages.includes(language)) continue;
-
-    let triggered = false;
-
-    // Check if our single-pass already caught it
-    if (triggeredRuleIds.has(rule.id)) {
-      triggered = true;
-    }
-    // Otherwise, run the standard test for non-loop rules
-    else if (!["linear-scan-in-loop", "alloc-in-loop", "sort-in-loop", "async-in-loop", "dom-in-loop"].includes(rule.id)) {
-      try {
-        triggered = rule.test(lines, code, rawLines, nestingDepth);
-      } catch (_) {}
-    }
-
-    if (triggered) {
-      flags.push({ ...rule, message: rule.dynamic ? rule.dynamic(lines) : rule.message, pass: false });
-    } else {
-      passed.push(rule);
-    }
-  }
-
-  // --- 3. CALCULATE COMPLEXITIES (Fixes O(n²) Scans) ---
-  let worstScore = 0;
-  let worstComplexity = "O(n)";
-
-  for (const flag of flags) {
-    if (flag.complexity && COMPLEXITY_HIERARCHY[flag.complexity]) {
-      const score = COMPLEXITY_HIERARCHY[flag.complexity];
-      if (score > worstScore) {
-        worstScore = score;
-        worstComplexity = flag.complexity;
-      }
-    }
-  }
-
-  return {
-    passed,
-    flags,
-    stats: {
-      totalRules: RULES.length,
-      passed: passed.length,
-      failed: flags.length,
-      complexity: worstComplexity
-    }
-  };
-}
+// ── Run engine (imported from src/analysis/engine.js) ─────────────────────────
 
 // ── Constants for EXT_LANG mapping ───────────────────────────────────────────
 const LANGUAGES_DISPLAY = {
@@ -496,6 +391,7 @@ function App() {
       try {
         vantaEffect.current = TOPOLOGY({
           el: vantaRef.current,
+          p5: p5,
           mouseControls: true,
           touchControls: true,
           gyroControls: false,
@@ -503,11 +399,8 @@ function App() {
           minWidth: 200.00,
           scale: 1.00,
           scaleMobile: 1.00,
-          color: 0x3b82f6,
-          backgroundColor: 0x0a0a0a,
-          points: 8.00,
-          maxDistance: 20.00,
-          spacing: 16.00
+          color: 0x16b9,
+          backgroundColor: 0x0,
         });
       } catch (error) {
         console.error('Vanta.js initialization error:', error);
@@ -517,6 +410,7 @@ function App() {
       if (vantaEffect.current) {
         try {
           vantaEffect.current.destroy();
+          vantaEffect.current = null;
         } catch (error) {
           console.error('Vanta.js cleanup error:', error);
         }
@@ -527,7 +421,7 @@ function App() {
   return (
     <div style={{
       minHeight:"100vh",
-      background:"#0a0a0a",
+      background:"#000000",
       color:"#e5e7eb",
       fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     }}>
@@ -536,7 +430,10 @@ function App() {
         ref={vantaRef}
         style={{
           position:"fixed",
-          inset:0,
+          top:0,
+          left:0,
+          width:"100vw",
+          height:"100vh",
           zIndex:0
         }}
       />
@@ -545,39 +442,38 @@ function App() {
       <div style={{ position:"relative", zIndex:1, maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
 
         {/* Header */}
-        <header style={{ marginBottom:48 }}>
+        <header style={{ marginBottom:56, display:"flex", flexDirection:"column", alignItems:"center", textAlign:"center" }}>
+          <TextScramble
+            text="ometa*N"
+            className="text-5xl font-semibold mb-12"
+          />
+
           <div style={{
-            display:"inline-block",
-            padding:"4px 12px",
-            background:"rgba(59, 130, 246, 0.1)",
-            border:"1px solid rgba(59, 130, 246, 0.2)",
-            borderRadius:4,
-            fontSize:12,
-            fontWeight:500,
+            display:"inline-flex",
+            alignItems:"center",
+            gap:6,
+            padding:"5px 16px",
+            background:"rgba(59, 130, 246, 0.07)",
+            border:"1px solid rgba(59, 130, 246, 0.15)",
+            borderRadius:99,
+            fontSize:11,
+            fontWeight:600,
             color:"#60a5fa",
-            marginBottom:16,
-            letterSpacing:"0.5px"
+            marginBottom:20,
+            letterSpacing:"1.2px",
+            textTransform:"uppercase"
           }}>
-            {RULES.length} RULES · CLIENT-SIDE · PRIVACY-FIRST
+            {RULES.length} Rules · Client-Side · Privacy-First
           </div>
 
-          <h1 style={{
-            fontSize:48,
-            fontWeight:600,
-            margin:"0 0 12px 0",
-            color:"#ffffff",
-            letterSpacing:"-0.02em"
-          }}>
-            Code Efficiency Checker
-          </h1>
-
           <p style={{
-            fontSize:18,
+            fontSize:16,
             color:"#9ca3af",
             margin:0,
-            maxWidth:600
+            maxWidth:500,
+            lineHeight:1.75
           }}>
-            Detect algorithmic inefficiencies and AI-generated code issues. 100% client-side analysis with zero data collection.
+            Detect algorithmic inefficiencies and AI-generated code issues — 100% client-side, zero data collection.
           </p>
         </header>
 
