@@ -322,18 +322,31 @@ function App() {
     // Stats
     if (result.type === 'single') {
       addText("Analysis Summary", 16, true);
-      addText(`Total Rules Checked: ${result.data.stats.totalRules}`, 12);
-      addText(`Passed: ${result.data.stats.passed}`, 12);
-      addText(`Failed: ${result.data.stats.failed}`, 12);
-      addText(`Worst Complexity: ${result.data.stats.complexity}`, 12);
+
+      if (result.analysisMode === 'security') {
+        // Security mode stats
+        addText(`Total Rules Checked: ${result.data.stats.rulesChecked || 0}`, 12);
+        addText(`Critical Issues: ${result.data.stats.critical || 0}`, 12);
+        addText(`High Issues: ${result.data.stats.high || 0}`, 12);
+        addText(`Medium Issues: ${result.data.stats.medium || 0}`, 12);
+        addText(`Low Issues: ${result.data.stats.low || 0}`, 12);
+        addText(`Security Score: ${result.data.securityScore || 0}/100`, 12);
+      } else {
+        // Performance mode stats
+        addText(`Total Rules Checked: ${result.data.stats.totalRules}`, 12);
+        addText(`Passed: ${result.data.stats.passed}`, 12);
+        addText(`Failed: ${result.data.stats.failed}`, 12);
+        addText(`Worst Complexity: ${result.data.stats.complexity}`, 12);
+      }
       addSpacing(10);
 
       // Issues
-      if (result.data.flags.length > 0) {
-        addText(`Issues Found (${result.data.flags.length})`, 16, true);
+      const issues = result.analysisMode === 'security' ? result.data.allIssues || [] : result.data.flags || [];
+      if (issues.length > 0) {
+        addText(`Issues Found (${issues.length})`, 16, true);
         addSpacing(5);
 
-        const sortedFlags = [...result.data.flags].sort((a, b) =>
+        const sortedFlags = [...issues].sort((a, b) =>
           calculateImpactScore(b) - calculateImpactScore(a)
         );
 
@@ -350,20 +363,25 @@ function App() {
           }
 
           if (beginnerMode) {
-            const explanation = getBeginnerExplanation(flag.id);
-            addSpacing(3);
-            addText("Beginner Explanation:", 9, true);
-            addText(`What's happening: ${explanation.simple}`, 8);
-            addText(`Impact: ${explanation.impact}`, 8);
-            addText(`Fix: ${explanation.fix}`, 8);
+            const explanation = result.analysisMode === 'security'
+              ? getSecurityBeginnerExplanation(flag.id)
+              : getBeginnerExplanation(flag.id);
+
+            if (explanation) {
+              addSpacing(3);
+              addText("Beginner Explanation:", 9, true);
+              addText(`What's happening: ${explanation.what || explanation.simple}`, 8);
+              addText(`Impact: ${explanation.impact}`, 8);
+              addText(`Fix: ${explanation.fix}`, 8);
+            }
           }
 
           addSpacing(8);
         });
       }
 
-      // Passed rules
-      if (result.data.passed.length > 0) {
+      // Passed rules (performance mode only)
+      if (result.analysisMode !== 'security' && result.data.passed && result.data.passed.length > 0) {
         addText(`Passed Rules (${result.data.passed.length})`, 16, true);
         result.data.passed.forEach((rule, i) => {
           if (i > 0 && i % 3 === 0) addSpacing(2);
@@ -373,28 +391,47 @@ function App() {
     } else if (result.type === 'repository') {
       addText(`Repository Analysis: ${result.data.repoName}`, 16, true);
       addText(`Files Analyzed: ${result.data.results.length}`, 12);
+      addText(`Analysis Mode: ${result.analysisMode === 'security' ? 'Security' : 'Performance'}`, 12);
       addSpacing(10);
 
       // Aggregate statistics
       const aggregated = result.data.results.reduce((acc, file) => {
         if (!file.error && file.analysis) {
-          acc.totalFailed += file.analysis.stats.failed;
+          acc.totalFailed += file.analysis.stats.failed || 0;
           acc.filesAnalyzed += 1;
-          file.analysis.flags.forEach(flag => {
+
+          // Handle both security (allIssues) and performance (flags) modes
+          const issues = file.analysis.allIssues || file.analysis.flags || [];
+          issues.forEach(flag => {
             const key = flag.id;
             if (!acc.flagsMap.has(key)) {
               acc.flagsMap.set(key, { ...flag, files: [] });
             }
             acc.flagsMap.get(key).files.push(file.path);
           });
+
+          // Track severity breakdown for security mode
+          if (result.analysisMode === 'security' && file.analysis.stats) {
+            acc.critical += file.analysis.stats.critical || 0;
+            acc.high += file.analysis.stats.high || 0;
+            acc.medium += file.analysis.stats.medium || 0;
+            acc.low += file.analysis.stats.low || 0;
+          }
         }
         return acc;
-      }, { totalFailed: 0, filesAnalyzed: 0, flagsMap: new Map() });
+      }, { totalFailed: 0, filesAnalyzed: 0, flagsMap: new Map(), critical: 0, high: 0, medium: 0, low: 0 });
 
       const aggregatedFlags = Array.from(aggregated.flagsMap.values());
 
       addText(`Unique Issues Found: ${aggregatedFlags.length}`, 12);
-      addText(`Total Flags: ${aggregated.totalFailed}`, 12);
+      if (result.analysisMode === 'security') {
+        addText(`Critical Issues: ${aggregated.critical}`, 12);
+        addText(`High Issues: ${aggregated.high}`, 12);
+        addText(`Medium Issues: ${aggregated.medium}`, 12);
+        addText(`Low Issues: ${aggregated.low}`, 12);
+      } else {
+        addText(`Total Flags: ${aggregated.totalFailed}`, 12);
+      }
       addSpacing(10);
 
       // Show aggregated issues
@@ -421,12 +458,17 @@ function App() {
           addText(`Found in ${flag.files.length} file(s): ${flag.files.slice(0, 3).map(f => f.split('/').pop()).join(', ')}${flag.files.length > 3 ? ` +${flag.files.length - 3} more` : ''}`, 8);
 
           if (beginnerMode) {
-            const explanation = getBeginnerExplanation(flag.id);
-            addSpacing(3);
-            addText("Beginner Explanation:", 9, true);
-            addText(`What's happening: ${explanation.simple}`, 8);
-            addText(`Impact: ${explanation.impact}`, 8);
-            addText(`Fix: ${explanation.fix}`, 8);
+            const explanation = result.analysisMode === 'security'
+              ? getSecurityBeginnerExplanation(flag.id)
+              : getBeginnerExplanation(flag.id);
+
+            if (explanation) {
+              addSpacing(3);
+              addText("Beginner Explanation:", 9, true);
+              addText(`What's happening: ${explanation.what || explanation.simple}`, 8);
+              addText(`Impact: ${explanation.impact}`, 8);
+              addText(`Fix: ${explanation.fix}`, 8);
+            }
           }
 
           addSpacing(8);
@@ -441,7 +483,12 @@ function App() {
         if (fileResult.error) {
           addText(`${i + 1}. ${fileResult.path} - Error: ${fileResult.error}`, 9);
         } else {
-          addText(`${i + 1}. ${fileResult.path} - Passed: ${fileResult.analysis.stats.passed} | Failed: ${fileResult.analysis.stats.failed}`, 9);
+          if (result.analysisMode === 'security') {
+            const stats = fileResult.analysis.stats || {};
+            addText(`${i + 1}. ${fileResult.path} - Critical: ${stats.critical || 0} | High: ${stats.high || 0} | Score: ${fileResult.analysis.securityScore || 0}/100`, 9);
+          } else {
+            addText(`${i + 1}. ${fileResult.path} - Passed: ${fileResult.analysis.stats.passed || 0} | Failed: ${fileResult.analysis.stats.failed || 0}`, 9);
+          }
         }
       });
     }
