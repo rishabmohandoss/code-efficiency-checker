@@ -2,6 +2,8 @@
 
 A client-side static analysis tool that scans code for performance anti-patterns and algorithmic inefficiencies. Built with React + Vite, runs entirely in the browser with zero backend dependencies.
 
+Link to website: https://code-efficiency-checker-flame.vercel.app/
+
 ## Features
 
 - **25 Pattern-Matching Rules** detecting O(n²), O(n³) complexity issues & AI-generated code anti-patterns
