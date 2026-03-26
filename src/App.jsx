@@ -21,6 +21,7 @@ import {
 } from './config/constants.js';
 import { cleanLines, detectIndentSize, nestingDepthFactory, hasNestedLoops, hasLinearScanInLoop, maxLoopDepth } from './utils/codeAnalysis.js';
 import { runAnalysis } from './analysis/engine.js';
+import { runSecurityAnalysis, getBeginnerExplanation as getSecurityBeginnerExplanation } from './analysis/security-engine.js';
 import { TextScramble } from './components/ui/text-scramble.jsx';
 import { EXAMPLE_LIST } from './utils/examples.js';
 import { getBeginnerExplanation, calculateImpactScore } from './utils/beginnerExplanations.js';
@@ -115,7 +116,7 @@ async function fetchGitHubRepoTree(info, signal) {
 }
 
 // Analyze entire repository
-async function analyzeGitHubRepository(info, onProgress, signal) {
+async function analyzeGitHubRepository(info, onProgress, signal, analysisMode = "performance") {
   const { files, branch } = await fetchGitHubRepoTree(info, signal);
   const results = [];
 
@@ -128,7 +129,11 @@ async function analyzeGitHubRepository(info, onProgress, signal) {
       const content = await fetchGitHubFile(fileInfo, signal);
       const ext = file.path.split('.').pop().toLowerCase();
       const language = EXT_LANG[ext] || 'javascript';
-      const analysis = runAnalysis(content, language);
+
+      // Run either performance or security analysis
+      const analysis = analysisMode === "security"
+        ? runSecurityAnalysis(content, language)
+        : runAnalysis(content, language);
 
       results.push({
         path: file.path,
@@ -166,6 +171,7 @@ function App() {
   const [repoProgress, setRepoProgress] = useState(null);
   const [beginnerMode, setBeginnerMode] = useState(false);
   const [showExamples, setShowExamples] = useState(false);
+  const [analysisMode, setAnalysisMode] = useState("performance"); // "performance" or "security"
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
   const vantaRef = useRef(null);
@@ -208,12 +214,14 @@ function App() {
           const repoResult = await analyzeGitHubRepository(
             info,
             (progress) => setRepoProgress(progress),
-            signal
+            signal,
+            analysisMode
           );
 
           setResult({
             type: 'repository',
-            data: repoResult
+            data: repoResult,
+            analysisMode: analysisMode
           });
           setLoading(false);
           return;
@@ -225,10 +233,17 @@ function App() {
         }
       }
 
-      analysisResult = runAnalysis(sourceCode, language);
+      // Run either performance or security analysis based on mode
+      if (analysisMode === "security") {
+        analysisResult = runSecurityAnalysis(sourceCode, language);
+      } else {
+        analysisResult = runAnalysis(sourceCode, language);
+      }
+
       setResult({
         type: 'single',
-        data: analysisResult
+        data: analysisResult,
+        analysisMode: analysisMode
       });
 
     } catch (err) {
@@ -241,7 +256,7 @@ function App() {
       setLoading(false);
       setRepoProgress(null);
     }
-  }, [code, language, method, githubUrl]);
+  }, [code, language, method, githubUrl, analysisMode]);
 
   const handleFileUpload = (e) => {
     const file = e.target.files?.[0];
@@ -768,6 +783,87 @@ function App() {
               </>
             )}
 
+            {/* Analysis Mode Toggle */}
+            <div style={{
+              marginTop:24,
+              padding:16,
+              background:"rgba(0,0,0,0.3)",
+              border:"1px solid rgba(255,255,255,0.1)",
+              borderRadius:6
+            }}>
+              <div style={{ marginBottom:12, fontSize:14, fontWeight:500, color:"#e5e7eb" }}>
+                Analysis Mode:
+              </div>
+              <div style={{ display:"flex", gap:12 }}>
+                <button
+                  onClick={() => setAnalysisMode("performance")}
+                  style={{
+                    flex:1,
+                    padding:"12px 16px",
+                    background: analysisMode === "performance" ? "rgba(16, 185, 129, 0.15)" : "rgba(255,255,255,0.05)",
+                    border: analysisMode === "performance" ? "1px solid rgba(16, 185, 129, 0.4)" : "1px solid rgba(255,255,255,0.1)",
+                    borderRadius:6,
+                    color: analysisMode === "performance" ? "#10b981" : "#9ca3af",
+                    fontSize:14,
+                    fontWeight:500,
+                    cursor:"pointer",
+                    transition:"all 0.2s ease",
+                    fontFamily:"inherit"
+                  }}
+                  onMouseOver={(e) => {
+                    if (analysisMode !== "performance") {
+                      e.target.style.background = "rgba(255,255,255,0.08)";
+                    }
+                  }}
+                  onMouseOut={(e) => {
+                    if (analysisMode !== "performance") {
+                      e.target.style.background = "rgba(255,255,255,0.05)";
+                    }
+                  }}
+                >
+                  ⚡ Performance
+                </button>
+                <button
+                  onClick={() => setAnalysisMode("security")}
+                  style={{
+                    flex:1,
+                    padding:"12px 16px",
+                    background: analysisMode === "security" ? "rgba(239, 68, 68, 0.15)" : "rgba(255,255,255,0.05)",
+                    border: analysisMode === "security" ? "1px solid rgba(239, 68, 68, 0.4)" : "1px solid rgba(255,255,255,0.1)",
+                    borderRadius:6,
+                    color: analysisMode === "security" ? "#ef4444" : "#9ca3af",
+                    fontSize:14,
+                    fontWeight:500,
+                    cursor:"pointer",
+                    transition:"all 0.2s ease",
+                    fontFamily:"inherit"
+                  }}
+                  onMouseOver={(e) => {
+                    if (analysisMode !== "security") {
+                      e.target.style.background = "rgba(255,255,255,0.08)";
+                    }
+                  }}
+                  onMouseOut={(e) => {
+                    if (analysisMode !== "security") {
+                      e.target.style.background = "rgba(255,255,255,0.05)";
+                    }
+                  }}
+                >
+                  🛡️ Security
+                </button>
+              </div>
+              <p style={{
+                fontSize:12,
+                color:"#6b7280",
+                margin:"12px 0 0 0",
+                lineHeight:1.5
+              }}>
+                {analysisMode === "performance"
+                  ? "Detects performance issues like nested loops, O(n²) complexity, and inefficient patterns."
+                  : "Detects security vulnerabilities like hardcoded secrets, SQL injection, XSS, and OWASP Top 10 issues."}
+              </p>
+            </div>
+
             {error && (
               <div style={{
                 marginTop:16,
@@ -820,27 +916,99 @@ function App() {
                   gap:16,
                   marginBottom:24
                 }}>
-                  {[
-                    { label: "Total Rules", value: result.data.stats.totalRules, color: "#6b7280" },
-                    { label: "Passed", value: result.data.stats.passed, color: "#10b981" },
-                    { label: "Failed", value: result.data.stats.failed, color: result.data.stats.failed > 0 ? "#ef4444" : "#10b981" },
-                    { label: "Complexity", value: result.data.stats.complexity, color: "#8b5cf6" }
-                  ].map((stat, i) => (
-                    <div key={i} style={{
-                      padding:20,
-                      background:"rgba(255,255,255,0.03)",
-                      border:"1px solid rgba(255,255,255,0.1)",
-                      borderRadius:8
-                    }}>
-                      <div style={{ fontSize:12, color:"#6b7280", marginBottom:8, fontWeight:500, textTransform:"uppercase", letterSpacing:"0.5px" }}>
-                        {stat.label}
+                  {result.analysisMode === "security" ? (
+                    // Security Stats
+                    [
+                      { label: "Critical", value: result.data.stats.critical, color: result.data.stats.critical > 0 ? "#ef4444" : "#6b7280" },
+                      { label: "High", value: result.data.stats.high, color: result.data.stats.high > 0 ? "#f97316" : "#6b7280" },
+                      { label: "Medium", value: result.data.stats.medium, color: result.data.stats.medium > 0 ? "#eab308" : "#6b7280" },
+                      { label: "Low", value: result.data.stats.low, color: result.data.stats.low > 0 ? "#9ca3af" : "#6b7280" },
+                      {
+                        label: "Security Score",
+                        value: result.data.securityScore + "/100",
+                        color: result.data.securityScore >= 80 ? "#10b981" : result.data.securityScore >= 50 ? "#eab308" : "#ef4444"
+                      }
+                    ].map((stat, i) => (
+                      <div key={i} style={{
+                        padding:20,
+                        background:"rgba(255,255,255,0.03)",
+                        border:"1px solid rgba(255,255,255,0.1)",
+                        borderRadius:8
+                      }}>
+                        <div style={{ fontSize:12, color:"#6b7280", marginBottom:8, fontWeight:500, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                          {stat.label}
+                        </div>
+                        <div style={{ fontSize:32, fontWeight:700, color: stat.color }}>
+                          {stat.value}
+                        </div>
                       </div>
-                      <div style={{ fontSize:32, fontWeight:700, color: stat.color }}>
-                        {stat.value}
+                    ))
+                  ) : (
+                    // Performance Stats
+                    [
+                      { label: "Total Rules", value: result.data.stats.totalRules, color: "#6b7280" },
+                      { label: "Passed", value: result.data.stats.passed, color: "#10b981" },
+                      { label: "Failed", value: result.data.stats.failed, color: result.data.stats.failed > 0 ? "#ef4444" : "#10b981" },
+                      { label: "Complexity", value: result.data.stats.complexity, color: "#8b5cf6" }
+                    ].map((stat, i) => (
+                      <div key={i} style={{
+                        padding:20,
+                        background:"rgba(255,255,255,0.03)",
+                        border:"1px solid rgba(255,255,255,0.1)",
+                        borderRadius:8
+                      }}>
+                        <div style={{ fontSize:12, color:"#6b7280", marginBottom:8, fontWeight:500, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                          {stat.label}
+                        </div>
+                        <div style={{ fontSize:32, fontWeight:700, color: stat.color }}>
+                          {stat.value}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+
+                {/* Deployment Readiness (Security mode only) */}
+                {result.analysisMode === "security" && (
+                  <div style={{
+                    marginBottom:24,
+                    padding:20,
+                    background: result.data.deploymentReady ? "rgba(16, 185, 129, 0.08)" : "rgba(239, 68, 68, 0.08)",
+                    border: result.data.deploymentReady ? "1px solid rgba(16, 185, 129, 0.3)" : "1px solid rgba(239, 68, 68, 0.3)",
+                    borderRadius:8
+                  }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:12, marginBottom:12 }}>
+                      <div style={{
+                        fontSize:36,
+                        lineHeight:1
+                      }}>
+                        {result.data.deploymentReady ? "✅" : "⚠️"}
+                      </div>
+                      <div style={{ flex:1 }}>
+                        <div style={{ fontSize:18, fontWeight:600, color:"#ffffff", marginBottom:4 }}>
+                          {result.data.deploymentReady ? "Ready to Deploy" : "NOT Ready to Deploy"}
+                        </div>
+                        <div style={{ fontSize:14, color:"#9ca3af" }}>
+                          {result.data.deploymentReady
+                            ? "No critical security issues detected. Your code passes all essential security checks."
+                            : `${result.data.stats.critical} critical issue${result.data.stats.critical > 1 ? 's' : ''} must be fixed before deployment.`}
+                        </div>
                       </div>
                     </div>
-                  ))}
-                </div>
+                    <div style={{
+                      padding:"12px 16px",
+                      background:"rgba(0,0,0,0.2)",
+                      borderRadius:6,
+                      fontSize:13,
+                      color:"#d1d5db"
+                    }}>
+                      <strong>Security Score: {result.data.securityScore}/100</strong> —
+                      {result.data.securityScore >= 80 ? " Excellent security posture" :
+                       result.data.securityScore >= 50 ? " Needs improvement" :
+                       " Critical vulnerabilities present"}
+                    </div>
+                  </div>
+                )}
 
                 {/* Export and Controls */}
                 <div style={{ display:"flex", justifyContent:"flex-end", gap:12, marginBottom:16 }}>
@@ -865,12 +1033,13 @@ function App() {
                   </button>
                 </div>
 
-                {/* Failed rules */}
-                {result.data.flags.length > 0 && (
+                {/* Failed rules / Security Issues */}
+                {((result.analysisMode === "security" && result.data.allIssues?.length > 0) ||
+                  (result.analysisMode !== "security" && result.data.flags?.length > 0)) && (
                   <div style={{ marginBottom:24 }}>
                     <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
                       <h3 style={{ fontSize:20, fontWeight:600, margin:0, color:"#ffffff" }}>
-                        Issues Found ({result.data.flags.length})
+                        {result.analysisMode === "security" ? "Security Issues" : "Issues Found"} ({result.analysisMode === "security" ? result.data.allIssues.length : result.data.flags.length})
                       </h3>
                       <button
                         onClick={() => setBeginnerMode(!beginnerMode)}
@@ -896,7 +1065,10 @@ function App() {
                         {beginnerMode ? "✓ " : ""}Beginner Mode
                       </button>
                     </div>
-                    {[...result.data.flags].sort((a, b) => calculateImpactScore(b) - calculateImpactScore(a)).map((flag, i) => {
+                    {(result.analysisMode === "security"
+                      ? [...result.data.allIssues]
+                      : [...result.data.flags].sort((a, b) => calculateImpactScore(b) - calculateImpactScore(a))
+                    ).map((flag, i) => {
                       const colors = SEVERITY_COLORS[flag.severity];
                       return (
                         <div key={i} style={{
@@ -926,31 +1098,39 @@ function App() {
                           <p style={{ fontSize:14, lineHeight:1.6, color:"#d1d5db", margin:"0 0 12px 0" }}>
                             {flag.message}
                           </p>
-                          {beginnerMode && (
-                            <div style={{
-                              marginBottom:12,
-                              padding:16,
-                              background:"rgba(59, 130, 246, 0.08)",
-                              border:"1px solid rgba(59, 130, 246, 0.2)",
-                              borderRadius:6
-                            }}>
-                              <div style={{ fontSize:13, fontWeight:600, color:"#60a5fa", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.5px" }}>
-                                Beginner Explanation
+                          {beginnerMode && (() => {
+                            const explanation = result.analysisMode === "security"
+                              ? getSecurityBeginnerExplanation(flag.id)
+                              : getBeginnerExplanation(flag.id);
+
+                            if (!explanation) return null;
+
+                            return (
+                              <div style={{
+                                marginBottom:12,
+                                padding:16,
+                                background:"rgba(59, 130, 246, 0.08)",
+                                border:"1px solid rgba(59, 130, 246, 0.2)",
+                                borderRadius:6
+                              }}>
+                                <div style={{ fontSize:13, fontWeight:600, color:"#60a5fa", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                                  Beginner Explanation
+                                </div>
+                                <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                  <strong style={{ color:"#ffffff" }}>What's happening:</strong> {explanation.what || explanation.simple}
+                                </div>
+                                <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                  <strong style={{ color:"#ffffff" }}>Impact:</strong> {explanation.impact}
+                                </div>
+                                <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                  <strong style={{ color:"#ffffff" }}>Think of it like:</strong> {explanation.analogy}
+                                </div>
+                                <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb" }}>
+                                  <strong style={{ color:"#10b981" }}>How to fix:</strong> {explanation.fix}
+                                </div>
                               </div>
-                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
-                                <strong style={{ color:"#ffffff" }}>What's happening:</strong> {getBeginnerExplanation(flag.id).simple}
-                              </div>
-                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
-                                <strong style={{ color:"#ffffff" }}>Impact:</strong> {getBeginnerExplanation(flag.id).impact}
-                              </div>
-                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
-                                <strong style={{ color:"#ffffff" }}>Think of it like:</strong> {getBeginnerExplanation(flag.id).analogy}
-                              </div>
-                              <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb" }}>
-                                <strong style={{ color:"#10b981" }}>How to fix:</strong> {getBeginnerExplanation(flag.id).fix}
-                              </div>
-                            </div>
-                          )}
+                            );
+                          })()}
                           {flag.hint && (
                             <div style={{
                               padding:12,
@@ -975,8 +1155,8 @@ function App() {
                   </div>
                 )}
 
-                {/* Passed rules */}
-                {result.data.passed.length > 0 && (
+                {/* Passed rules (Performance mode only) */}
+                {result.analysisMode !== "security" && result.data.passed?.length > 0 && (
                   <div>
                     <h3 style={{ fontSize:20, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
                       Passed ({result.data.passed.length})
