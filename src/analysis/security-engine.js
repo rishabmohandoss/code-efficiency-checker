@@ -72,6 +72,7 @@ export function runSecurityAnalysis(code, language = 'javascript') {
   detectConfigurationIssues(code, lines, results, language);
   detectDependencyIssues(code, lines, results, language);
   detectCICDIssues(code, lines, results, language);
+  detectCodeQualityPerformance(code, lines, results, language);
 
   // Calculate final stats
   results.stats.critical = results.critical.length;
@@ -1803,6 +1804,331 @@ function detectCICDIssues(code, lines, results, language) {
   results.stats.rulesChecked += 4; // Rules 63-66
 }
 
+/**
+ * Category 9: Code Quality & Performance (Rules 67-72)
+ */
+function detectCodeQualityPerformance(code, lines, results, language) {
+  const issues = [];
+
+  // Rule 67: Blocking Operations in Event Loop - HIGH
+  const blockingOperations = [
+    { pattern: /fs\.readFileSync\s*\(/gi, name: 'fs.readFileSync' },
+    { pattern: /fs\.writeFileSync\s*\(/gi, name: 'fs.writeFileSync' },
+    { pattern: /fs\.existsSync\s*\(/gi, name: 'fs.existsSync' },
+    { pattern: /fs\.readdirSync\s*\(/gi, name: 'fs.readdirSync' },
+    { pattern: /fs\.statSync\s*\(/gi, name: 'fs.statSync' },
+    { pattern: /crypto\.pbkdf2Sync\s*\(/gi, name: 'crypto.pbkdf2Sync' },
+    { pattern: /crypto\.scryptSync\s*\(/gi, name: 'crypto.scryptSync' },
+    { pattern: /child_process\.execSync\s*\(/gi, name: 'execSync' },
+    { pattern: /child_process\.spawnSync\s*\(/gi, name: 'spawnSync' },
+    { pattern: /Atomics\.wait\s*\(/gi, name: 'Atomics.wait' }
+  ];
+
+  lines.forEach((line, index) => {
+    blockingOperations.forEach(({ pattern, name }) => {
+      if (pattern.test(line)) {
+        // Skip if it's in a comment
+        if (line.trim().startsWith('//') || line.trim().startsWith('*') || line.trim().startsWith('#')) {
+          return;
+        }
+
+        const issue = createIssue(
+          'blocking-operation',
+          SEVERITY.HIGH,
+          'Blocking Synchronous Operation',
+          `Code uses ${name}, a synchronous operation that blocks the entire event loop. In Node.js, this freezes your server for ALL users while the operation completes. If the file is large or the operation is slow, your entire application becomes unresponsive.`,
+          `Replace ${name} with its async version. For example: use fs.readFile() with async/await instead of fs.readFileSync(). This allows Node.js to handle other requests while waiting for I/O operations to complete.`,
+          index + 1,
+          'Performance'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 68: Memory Leaks - MEDIUM
+  const memoryLeakPatterns = [
+    {
+      pattern: /addEventListener\s*\([^)]+\)/gi,
+      antiPattern: /removeEventListener/gi,
+      name: 'Event listener not removed'
+    },
+    {
+      pattern: /setInterval\s*\(/gi,
+      antiPattern: /clearInterval/gi,
+      name: 'setInterval not cleared'
+    },
+    {
+      pattern: /setTimeout\s*\(/gi,
+      antiPattern: /clearTimeout/gi,
+      name: 'setTimeout not cleared',
+      severity: 'low' // setTimeout is less critical than setInterval
+    }
+  ];
+
+  // Check for event listeners without removeEventListener in same file
+  if (/addEventListener\s*\(/gi.test(code) && !/removeEventListener/gi.test(code)) {
+    const issue = createIssue(
+      'memory-leak-event-listener',
+      SEVERITY.MEDIUM,
+      'Potential Memory Leak: Event Listener Not Removed',
+      'Code adds event listeners but never removes them. In React/Vue components or SPA routes, this creates memory leaks. Each time the component mounts, a new listener is added, but old ones stay in memory forever.',
+      'Remove event listeners in cleanup (React useEffect return, Vue beforeDestroy, or vanilla JS cleanup). Example: const handler = () => {...}; element.addEventListener("click", handler); return () => element.removeEventListener("click", handler);',
+      0,
+      'Performance'
+    );
+    issues.push(issue);
+  }
+
+  // Check for setInterval without clearInterval
+  if (/setInterval\s*\(/gi.test(code) && !/clearInterval/gi.test(code)) {
+    const issue = createIssue(
+      'memory-leak-interval',
+      SEVERITY.MEDIUM,
+      'Potential Memory Leak: setInterval Not Cleared',
+      'Code uses setInterval but never calls clearInterval. This creates memory leaks and keeps the interval running even after the component unmounts, potentially causing errors or performance degradation.',
+      'Always clear intervals in cleanup. Example: const id = setInterval(() => {...}, 1000); return () => clearInterval(id);',
+      0,
+      'Performance'
+    );
+    issues.push(issue);
+  }
+
+  // Check for global variable accumulation patterns
+  const globalAccumulationPatterns = [
+    /window\.\w+\s*=\s*\[\]/gi,
+    /window\.\w+\.push\s*\(/gi,
+    /global\.\w+\s*=\s*\[\]/gi
+  ];
+
+  lines.forEach((line, index) => {
+    globalAccumulationPatterns.forEach(pattern => {
+      if (pattern.test(line)) {
+        if (line.trim().startsWith('//') || line.trim().startsWith('*')) {
+          return;
+        }
+
+        const issue = createIssue(
+          'global-accumulation',
+          SEVERITY.LOW,
+          'Global Variable Accumulation',
+          'Code accumulates data in global variables (window/global). Over time, this consumes more and more memory. In long-running applications or SPAs, this can cause the page to slow down or crash.',
+          'Avoid storing growing data structures in global scope. Use local state, clean up old data, or implement pagination/virtualization for large lists.',
+          index + 1,
+          'Performance'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 69: N+1 Query Problems - MEDIUM
+  const databaseQueryPatterns = [
+    /\.find\s*\(/gi,
+    /\.findOne\s*\(/gi,
+    /\.findById\s*\(/gi,
+    /\.query\s*\(/gi,
+    /\.exec\s*\(/gi,
+    /SELECT\s+.*\s+FROM/gi,
+    /db\./gi,
+    /\.get\s*\(/gi
+  ];
+
+  const loopPatterns = [
+    /for\s*\(/gi,
+    /forEach\s*\(/gi,
+    /\.map\s*\(/gi,
+    /while\s*\(/gi
+  ];
+
+  lines.forEach((line, index) => {
+    const hasLoop = loopPatterns.some(pattern => pattern.test(line));
+
+    // Check next few lines for database queries inside loops
+    if (hasLoop && index < lines.length - 5) {
+      const nextLines = lines.slice(index + 1, index + 6).join('\n');
+      const hasQuery = databaseQueryPatterns.some(pattern => pattern.test(nextLines));
+
+      if (hasQuery) {
+        const issue = createIssue(
+          'n-plus-one-query',
+          SEVERITY.MEDIUM,
+          'N+1 Query Problem',
+          'Code executes database queries inside a loop. If the loop runs 100 times, you make 100+ database calls. This is extremely slow - a page that should load in 50ms can take 10+ seconds. Instagram had this bug in 2013 and their feed took minutes to load.',
+          'Use batch loading or eager loading. For SQL: use JOIN. For ORMs: use .populate() or .include(). For GraphQL: use DataLoader. Load all data in ONE query, then process in memory.',
+          index + 1,
+          'Performance'
+        );
+        issues.push(issue);
+      }
+    }
+  });
+
+  // Also check for fetch/axios in loops
+  const apiCallPatterns = [
+    /fetch\s*\(/gi,
+    /axios\./gi,
+    /http\.get\s*\(/gi,
+    /request\s*\(/gi
+  ];
+
+  lines.forEach((line, index) => {
+    const hasLoop = loopPatterns.some(pattern => pattern.test(line));
+
+    if (hasLoop && index < lines.length - 5) {
+      const nextLines = lines.slice(index + 1, index + 6).join('\n');
+      const hasAPICall = apiCallPatterns.some(pattern => pattern.test(nextLines));
+
+      if (hasAPICall) {
+        const issue = createIssue(
+          'api-calls-in-loop',
+          SEVERITY.MEDIUM,
+          'API Calls in Loop',
+          'Code makes API calls inside a loop. This causes severe performance problems and can hit rate limits. If you loop 100 times, you make 100 HTTP requests sequentially, which could take 10+ seconds.',
+          'Batch API calls using Promise.all() or the API\'s batch endpoint. Example: const promises = items.map(item => fetch(url + item.id)); const results = await Promise.all(promises);',
+          index + 1,
+          'Performance'
+        );
+        issues.push(issue);
+      }
+    }
+  });
+
+  // Rule 70: ReDoS - Inefficient Regular Expressions - MEDIUM
+  const redosPatterns = [
+    { pattern: /\/\(.*\*.*\)\*\+/g, name: 'Nested quantifiers (.*)*' },
+    { pattern: /\/\(.*\+.*\)\+/g, name: 'Nested quantifiers (.+)+' },
+    { pattern: /\/\(.*\{.*,.*\}.*\)\+/g, name: 'Nested quantifiers with repetition' },
+    { pattern: /\/\(.*\|.*\)\*.*\(.*\|.*\)\*/g, name: 'Multiple alternations with quantifiers' }
+  ];
+
+  lines.forEach((line, index) => {
+    // Look for regex patterns with catastrophic backtracking
+    const regexPatterns = line.match(/\/[^\/]+\/[gimsuy]*/g);
+
+    if (regexPatterns) {
+      regexPatterns.forEach(regex => {
+        // Check for dangerous patterns
+        if (/\(.*[*+].*\)[*+]/.test(regex)) {
+          const issue = createIssue(
+            'redos-vulnerability',
+            SEVERITY.MEDIUM,
+            'ReDoS: Inefficient Regular Expression',
+            'Regular expression uses nested quantifiers (like (a+)+ or (a*)*) which can cause catastrophic backtracking. Attackers can send specially crafted strings that make your regex take exponentially longer to process, causing DoS.',
+            'Simplify the regex to avoid nested quantifiers. Use atomic groups or possessive quantifiers if available. Test regex with long strings. Consider using a regex analysis tool like safe-regex.',
+            index + 1,
+            'Performance'
+          );
+          issues.push(issue);
+        }
+      });
+    }
+  });
+
+  // Rule 71: Large Bundle Size Anti-patterns - LOW
+  const bundleSizeAntiPatterns = [
+    {
+      pattern: /import\s+\*\s+as\s+\w+\s+from\s+['"]lodash['"]/gi,
+      name: 'lodash',
+      fix: 'import individual functions'
+    },
+    {
+      pattern: /import.+from\s+['"]moment['"]/gi,
+      name: 'moment',
+      fix: 'use date-fns or dayjs instead'
+    },
+    {
+      pattern: /import\s+\*\s+as\s+\w+\s+from\s+['"]@mui\/icons-material['"]/gi,
+      name: '@mui/icons-material',
+      fix: 'import individual icons'
+    },
+    {
+      pattern: /require\s*\(\s*['"]lodash['"]\s*\)/gi,
+      name: 'lodash',
+      fix: 'require individual functions'
+    }
+  ];
+
+  lines.forEach((line, index) => {
+    bundleSizeAntiPatterns.forEach(({ pattern, name, fix }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'large-bundle-import',
+          SEVERITY.LOW,
+          'Large Bundle Import',
+          `Code imports the entire ${name} library instead of specific functions. This adds hundreds of KB to your bundle size, making your app slower to load. Users on slow connections will wait much longer.`,
+          `${fix}. For lodash: import debounce from 'lodash/debounce' instead of import _ from 'lodash'. For moment: switch to date-fns (2KB) or dayjs (2KB) instead of moment (67KB).`,
+          index + 1,
+          'Performance'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 72: Console Logs in Production - LOW
+  const consolePatterns = [
+    /console\.log\s*\(/gi,
+    /console\.debug\s*\(/gi,
+    /console\.info\s*\(/gi,
+    /console\.warn\s*\(/gi,
+    /console\.error\s*\(/gi,
+    /console\.trace\s*\(/gi,
+    /console\.table\s*\(/gi
+  ];
+
+  // Only flag if there's no obvious guard
+  const hasProductionGuard = /process\.env\.NODE_ENV.*production/gi.test(code) ||
+                             /process\.env\.NODE_ENV.*development/gi.test(code) ||
+                             /__DEV__/gi.test(code);
+
+  if (!hasProductionGuard) {
+    let consoleCount = 0;
+    lines.forEach((line, index) => {
+      // Skip comments
+      if (line.trim().startsWith('//') || line.trim().startsWith('*') || line.trim().startsWith('#')) {
+        return;
+      }
+
+      consolePatterns.forEach(pattern => {
+        if (pattern.test(line)) {
+          consoleCount++;
+
+          // Only report first few instances
+          if (consoleCount <= 3) {
+            const issue = createIssue(
+              'console-in-production',
+              SEVERITY.LOW,
+              'Console Logs in Production Code',
+              'Code has console.log statements without production guards. These logs expose internal debugging info to users, cause minor performance overhead, and clutter the browser console in production.',
+              'Wrap console logs in development checks: if (process.env.NODE_ENV !== "production") { console.log(...) }. Or use a logging library that automatically strips logs in production builds. Many bundlers (Webpack, Vite) can remove console.* in production config.',
+              index + 1,
+              'Code Quality'
+            );
+            issues.push(issue);
+          }
+        }
+      });
+    });
+  }
+
+  // Add all issues to results
+  issues.forEach(issue => {
+    if (issue.severity === 'CRITICAL') {
+      results.critical.push(issue);
+    } else if (issue.severity === 'HIGH') {
+      results.high.push(issue);
+    } else if (issue.severity === 'MEDIUM') {
+      results.medium.push(issue);
+    } else {
+      results.low.push(issue);
+    }
+    results.allIssues.push(issue);
+  });
+
+  results.stats.rulesChecked += 6; // Rules 67-72
+}
+
 // Helper function to get beginner-friendly explanations
 export function getBeginnerExplanation(issueId) {
   const explanations = {
@@ -1931,6 +2257,60 @@ export function getBeginnerExplanation(issueId) {
       impact: 'The source website can be hacked or hijacked. The script can steal your deployment credentials, inject backdoors, or compromise your entire infrastructure. This is a common supply chain attack.',
       analogy: 'Like a stranger saying "close your eyes and drink this" - you have no idea what you\'re consuming until it\'s too late.',
       fix: 'Never pipe downloads to bash. Download first, verify integrity (checksum), then execute: curl -o script.sh URL && sha256sum -c checksum && bash script.sh. Better: vendor scripts in your repo or use official Docker images.'
+    },
+    'blocking-operation': {
+      what: 'Your code uses synchronous operations (like fs.readFileSync) that freeze the entire Node.js server while waiting for files/operations to complete.',
+      impact: 'If reading a 100MB file takes 2 seconds, your ENTIRE server is frozen for 2 seconds - no other users can be served. One slow operation blocks thousands of requests.',
+      analogy: 'Like a restaurant where the chef stops serving everyone else while waiting for one steak to cook. All customers wait, even those who ordered salads.',
+      fix: 'Use async versions: fs.readFile() with async/await instead of fs.readFileSync(). This lets Node.js handle other requests while waiting: async function read() { const data = await fs.promises.readFile(path); }'
+    },
+    'memory-leak-event-listener': {
+      what: 'Your component adds event listeners but never removes them. Each time the component mounts, new listeners are added, but old ones stay in memory forever.',
+      impact: 'Memory usage grows constantly. After 100 page navigations, you have 100 copies of the same listener. Eventually the browser slows down or crashes. This is extremely common in SPAs.',
+      analogy: 'Like subscribing to 100 newspapers but never cancelling - they pile up in your house until there\'s no room left.',
+      fix: 'Remove listeners in cleanup. React: useEffect(() => { element.addEventListener("click", handler); return () => element.removeEventListener("click", handler); }, []). Vue: beforeDestroy hook.'
+    },
+    'memory-leak-interval': {
+      what: 'Your code uses setInterval but never calls clearInterval. The interval keeps running even after the component unmounts, causing memory leaks and errors.',
+      impact: 'Timers run forever, consuming memory and CPU. After navigating away from a page, the interval still tries to update state/DOM that no longer exists, causing crashes or errors.',
+      analogy: 'Like setting a kitchen timer and leaving the house - it keeps ringing forever, wasting battery, even though you\'re not there to hear it.',
+      fix: 'Always clear intervals in cleanup. React: useEffect(() => { const id = setInterval(() => {...}, 1000); return () => clearInterval(id); }, []). Save the interval ID and clear it on unmount.'
+    },
+    'n-plus-one-query': {
+      what: 'Your code runs a database query inside a loop. If the loop runs 100 times, you make 100+ database calls instead of one. This is called the "N+1 problem".',
+      impact: 'Catastrophic performance. Each database call takes ~10ms. 100 calls = 1 second. Users see loading spinners for ages. This bug crashed Instagram\'s feed in 2013 - pages took 30+ seconds to load.',
+      analogy: 'Like going to the grocery store, buying one item, going home, then going back for the next item, 100 times. Instead of buying all 100 items in one trip.',
+      fix: 'Load all data in ONE query. SQL: use JOIN. ORMs: User.find().populate("posts"). GraphQL: use DataLoader. Get everything at once, then loop through the data in memory.'
+    },
+    'api-calls-in-loop': {
+      what: 'Your code makes HTTP requests inside a loop, calling the API once per item instead of batching. This is extremely slow and can hit rate limits.',
+      impact: 'Each API call takes 100-500ms. If you loop 50 times, that\'s 5-25 seconds of waiting. You might also hit API rate limits and get blocked. Users see eternal loading spinners.',
+      analogy: 'Like calling your friend 50 times to tell them 50 things, instead of calling once and saying all 50 things in one conversation.',
+      fix: 'Batch requests with Promise.all(): const promises = items.map(item => fetch(url + item.id)); const results = await Promise.all(promises). Or use the API\'s batch endpoint if available.'
+    },
+    'redos-vulnerability': {
+      what: 'Your regular expression uses nested quantifiers like (a+)+ which cause catastrophic backtracking. Attackers can send special strings that make the regex take exponentially longer to process.',
+      impact: 'A malicious 50-character string can hang your server for minutes or hours, causing DoS. Stack Overflow was taken down by a ReDoS attack in 2016.',
+      analogy: 'Like a maze that gets exponentially more complex with each step - eventually you\'re lost for hours trying every possible path.',
+      fix: 'Avoid nested quantifiers: (a+)+ becomes a+. Use atomic groups (?>) if your regex engine supports it. Test with long strings. Use tools like safe-regex to detect ReDoS vulnerabilities.'
+    },
+    'large-bundle-import': {
+      what: 'Your code imports entire libraries (like lodash or moment) instead of specific functions. This adds hundreds of KB to your JavaScript bundle.',
+      impact: 'Your app takes much longer to download and parse. Users on slow 3G connections wait 10+ seconds for the page to load. Every user pays the cost, every time.',
+      analogy: 'Like downloading the entire encyclopedia when you only need to look up one word - massive waste of time and bandwidth.',
+      fix: 'Import only what you need. lodash: import debounce from "lodash/debounce" instead of import _ from "lodash". moment: switch to date-fns (2KB) or dayjs (2KB) instead of moment (67KB).'
+    },
+    'console-in-production': {
+      what: 'Your code has console.log statements without production guards. These run in production, exposing debug info to users and causing minor performance overhead.',
+      impact: 'Users can open DevTools and see your internal debugging messages - potentially revealing sensitive logic. Console statements also cause small performance hits in loops.',
+      analogy: 'Like leaving sticky notes with private business notes all over your store for customers to read.',
+      fix: 'Guard console logs: if (process.env.NODE_ENV !== "production") { console.log(...) }. Or configure your bundler to strip console.* in production builds automatically.'
+    },
+    'global-accumulation': {
+      what: 'Your code stores growing data in global variables (window.items = [], window.items.push(...)). Over time, this consumes more and more memory.',
+      impact: 'In long-running SPAs, memory grows until the browser slows down or crashes. Users have to refresh the page periodically to clear memory.',
+      analogy: 'Like never emptying your trash can - eventually garbage overflows and your house becomes unlivable.',
+      fix: 'Avoid global state for accumulating data. Use component state, implement pagination, or clean up old data. For large lists, use virtualization (react-window) to only render visible items.'
     }
   };
 
