@@ -360,14 +360,74 @@ function App() {
       addText(`Files Analyzed: ${result.data.results.length}`, 12);
       addSpacing(10);
 
-      result.data.results.forEach((fileResult, i) => {
-        addText(`${i + 1}. ${fileResult.path}`, 11, true);
-        if (fileResult.error) {
-          addText(`Error: ${fileResult.error}`, 9);
-        } else {
-          addText(`Passed: ${fileResult.analysis.stats.passed} | Failed: ${fileResult.analysis.stats.failed} | Complexity: ${fileResult.analysis.stats.complexity}`, 9);
+      // Aggregate statistics
+      const aggregated = result.data.results.reduce((acc, file) => {
+        if (!file.error && file.analysis) {
+          acc.totalFailed += file.analysis.stats.failed;
+          acc.filesAnalyzed += 1;
+          file.analysis.flags.forEach(flag => {
+            const key = flag.id;
+            if (!acc.flagsMap.has(key)) {
+              acc.flagsMap.set(key, { ...flag, files: [] });
+            }
+            acc.flagsMap.get(key).files.push(file.path);
+          });
         }
+        return acc;
+      }, { totalFailed: 0, filesAnalyzed: 0, flagsMap: new Map() });
+
+      const aggregatedFlags = Array.from(aggregated.flagsMap.values());
+
+      addText(`Unique Issues Found: ${aggregatedFlags.length}`, 12);
+      addText(`Total Flags: ${aggregated.totalFailed}`, 12);
+      addSpacing(10);
+
+      // Show aggregated issues
+      if (aggregatedFlags.length > 0) {
+        addText(`Issues Found Across Repository (${aggregatedFlags.length} unique)`, 16, true);
         addSpacing(5);
+
+        const sortedFlags = [...aggregatedFlags].sort((a, b) =>
+          calculateImpactScore(b) - calculateImpactScore(a)
+        );
+
+        sortedFlags.forEach((flag, i) => {
+          addText(`${i + 1}. ${flag.title} [${flag.severity}]`, 12, true);
+          addText(`${flag.message}`, 10);
+
+          if (flag.hint) {
+            addText(`Hint: ${flag.hint}`, 9);
+          }
+
+          if (flag.complexity) {
+            addText(`Time Complexity: ${flag.complexity}`, 9);
+          }
+
+          addText(`Found in ${flag.files.length} file(s): ${flag.files.slice(0, 3).map(f => f.split('/').pop()).join(', ')}${flag.files.length > 3 ? ` +${flag.files.length - 3} more` : ''}`, 8);
+
+          if (beginnerMode) {
+            const explanation = getBeginnerExplanation(flag.id);
+            addSpacing(3);
+            addText("Beginner Explanation:", 9, true);
+            addText(`What's happening: ${explanation.simple}`, 8);
+            addText(`Impact: ${explanation.impact}`, 8);
+            addText(`Fix: ${explanation.fix}`, 8);
+          }
+
+          addSpacing(8);
+        });
+      }
+
+      // File summary
+      addText(`Files Summary (${result.data.results.length} files)`, 16, true);
+      addSpacing(5);
+      result.data.results.forEach((fileResult, i) => {
+        if (i > 0 && i % 5 === 0) addSpacing(3);
+        if (fileResult.error) {
+          addText(`${i + 1}. ${fileResult.path} - Error: ${fileResult.error}`, 9);
+        } else {
+          addText(`${i + 1}. ${fileResult.path} - Passed: ${fileResult.analysis.stats.passed} | Failed: ${fileResult.analysis.stats.failed}`, 9);
+        }
       });
     }
 
@@ -950,51 +1010,279 @@ function App() {
 
             {result.type === 'repository' && (
               <div>
-                <h3 style={{ fontSize:24, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
+                {/* Repository Header */}
+                <h3 style={{ fontSize:24, fontWeight:600, marginBottom:24, color:"#ffffff" }}>
                   Repository Analysis: {result.data.repoName}
                 </h3>
-                <div style={{
-                  padding:20,
-                  marginBottom:16,
-                  background:"rgba(255,255,255,0.03)",
-                  border:"1px solid rgba(255,255,255,0.1)",
-                  borderRadius:8
-                }}>
-                  <p style={{ fontSize:14, color:"#d1d5db", margin:0 }}>
-                    Analyzed {result.data.results.length} files
-                  </p>
-                </div>
 
-                {result.data.results.map((fileResult, i) => (
-                  <div key={i} style={{
-                    padding:20,
-                    marginBottom:12,
-                    background:"rgba(255,255,255,0.03)",
-                    border:"1px solid rgba(255,255,255,0.1)",
-                    borderRadius:8
-                  }}>
-                    <h4 style={{ fontSize:14, fontWeight:500, color:"#ffffff", marginBottom:8, fontFamily:"'JetBrains Mono', monospace" }}>
-                      {fileResult.path}
-                    </h4>
-                    {fileResult.error ? (
-                      <p style={{ color:"#ef4444", fontSize:14, margin:0 }}>
-                        Error: {fileResult.error}
-                      </p>
-                    ) : (
-                      <div style={{ display:"flex", gap:16, fontSize:14 }}>
-                        <span style={{ color:"#10b981" }}>
-                          ✓ {fileResult.analysis.stats.passed} passed
-                        </span>
-                        <span style={{ color: fileResult.analysis.stats.failed > 0 ? "#ef4444" : "#6b7280" }}>
-                          {fileResult.analysis.stats.failed > 0 ? "✗" : "—"} {fileResult.analysis.stats.failed} failed
-                        </span>
-                        <span style={{ color:"#9ca3af" }}>
-                          {fileResult.analysis.stats.complexity}
-                        </span>
+                {/* Aggregate Statistics */}
+                {(() => {
+                  const aggregated = result.data.results.reduce((acc, file) => {
+                    if (!file.error && file.analysis) {
+                      acc.totalPassed += file.analysis.stats.passed;
+                      acc.totalFailed += file.analysis.stats.failed;
+                      acc.filesAnalyzed += 1;
+                      // Collect all unique flags
+                      file.analysis.flags.forEach(flag => {
+                        const key = flag.id;
+                        if (!acc.flagsMap.has(key)) {
+                          acc.flagsMap.set(key, { ...flag, files: [] });
+                        }
+                        acc.flagsMap.get(key).files.push(file.path);
+                      });
+                      // Track worst complexity
+                      const complexityScores = { 'O(2ⁿ) worst': 10, 'O(n³)': 9, 'O(n² log n)': 7, 'O(n²)': 6, 'O(n log n)': 3, 'O(n)': 1 };
+                      const score = complexityScores[file.analysis.stats.complexity] || 0;
+                      if (score > acc.worstComplexityScore) {
+                        acc.worstComplexityScore = score;
+                        acc.worstComplexity = file.analysis.stats.complexity;
+                      }
+                    }
+                    return acc;
+                  }, { totalPassed: 0, totalFailed: 0, filesAnalyzed: 0, flagsMap: new Map(), worstComplexity: 'O(n)', worstComplexityScore: 0 });
+
+                  const aggregatedFlags = Array.from(aggregated.flagsMap.values());
+                  const uniqueIssues = aggregatedFlags.length;
+
+                  return (
+                    <>
+                      {/* Stats Grid */}
+                      <div style={{
+                        display:"grid",
+                        gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
+                        gap:16,
+                        marginBottom:24
+                      }}>
+                        {[
+                          { label: "Files Analyzed", value: aggregated.filesAnalyzed, color: "#6b7280" },
+                          { label: "Unique Issues", value: uniqueIssues, color: uniqueIssues > 0 ? "#ef4444" : "#10b981" },
+                          { label: "Total Flags", value: aggregated.totalFailed, color: aggregated.totalFailed > 0 ? "#ef4444" : "#10b981" },
+                          { label: "Worst Complexity", value: aggregated.worstComplexity, color: "#8b5cf6" }
+                        ].map((stat, i) => (
+                          <div key={i} style={{
+                            padding:20,
+                            background:"rgba(255,255,255,0.03)",
+                            border:"1px solid rgba(255,255,255,0.1)",
+                            borderRadius:8
+                          }}>
+                            <div style={{ fontSize:12, color:"#6b7280", marginBottom:8, fontWeight:500, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                              {stat.label}
+                            </div>
+                            <div style={{ fontSize:32, fontWeight:700, color: stat.color }}>
+                              {stat.value}
+                            </div>
+                          </div>
+                        ))}
                       </div>
-                    )}
-                  </div>
-                ))}
+
+                      {/* Export and Controls */}
+                      <div style={{ display:"flex", justifyContent:"flex-end", gap:12, marginBottom:16 }}>
+                        <button
+                          onClick={handleExportPDF}
+                          style={{
+                            padding:"10px 20px",
+                            background:"rgba(16, 185, 129, 0.1)",
+                            border:"1px solid rgba(16, 185, 129, 0.3)",
+                            borderRadius:6,
+                            color:"#10b981",
+                            fontSize:13,
+                            fontWeight:500,
+                            cursor:"pointer",
+                            transition:"all 0.2s ease",
+                            fontFamily:"inherit"
+                          }}
+                          onMouseOver={(e) => e.target.style.background = "rgba(16, 185, 129, 0.15)"}
+                          onMouseOut={(e) => e.target.style.background = "rgba(16, 185, 129, 0.1)"}
+                        >
+                          Export PDF
+                        </button>
+                      </div>
+
+                      {/* Unique Issues Found */}
+                      {uniqueIssues > 0 && (
+                        <div style={{ marginBottom:24 }}>
+                          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:16 }}>
+                            <h3 style={{ fontSize:20, fontWeight:600, margin:0, color:"#ffffff" }}>
+                              Issues Found Across Repository ({uniqueIssues} unique)
+                            </h3>
+                            <button
+                              onClick={() => setBeginnerMode(!beginnerMode)}
+                              style={{
+                                padding:"8px 16px",
+                                background: beginnerMode ? "rgba(59, 130, 246, 0.15)" : "rgba(255,255,255,0.05)",
+                                border: beginnerMode ? "1px solid rgba(59, 130, 246, 0.3)" : "1px solid rgba(255,255,255,0.1)",
+                                borderRadius:6,
+                                color: beginnerMode ? "#60a5fa" : "#9ca3af",
+                                fontSize:13,
+                                fontWeight:500,
+                                cursor:"pointer",
+                                transition:"all 0.2s ease",
+                                fontFamily:"inherit"
+                              }}
+                              onMouseOver={(e) => {
+                                e.target.style.background = beginnerMode ? "rgba(59, 130, 246, 0.2)" : "rgba(255,255,255,0.08)";
+                              }}
+                              onMouseOut={(e) => {
+                                e.target.style.background = beginnerMode ? "rgba(59, 130, 246, 0.15)" : "rgba(255,255,255,0.05)";
+                              }}
+                            >
+                              {beginnerMode ? "✓ " : ""}Beginner Mode
+                            </button>
+                          </div>
+
+                          {[...aggregatedFlags].sort((a, b) => calculateImpactScore(b) - calculateImpactScore(a)).map((flag, i) => {
+                            const colors = SEVERITY_COLORS[flag.severity];
+                            return (
+                              <div key={i} style={{
+                                padding:20,
+                                marginBottom:12,
+                                background: colors.bg,
+                                border:`1px solid ${colors.border}`,
+                                borderRadius:8
+                              }}>
+                                <div style={{ display:"flex", justifyContent:"space-between", alignItems:"start", marginBottom:12 }}>
+                                  <h4 style={{ fontSize:16, fontWeight:600, color:"#ffffff", margin:0 }}>
+                                    {flag.title}
+                                  </h4>
+                                  <div style={{
+                                    padding:"4px 10px",
+                                    borderRadius:4,
+                                    background: colors.badge,
+                                    color:"#ffffff",
+                                    fontSize:11,
+                                    fontWeight:600,
+                                    textTransform:"uppercase",
+                                    letterSpacing:"0.5px"
+                                  }}>
+                                    {flag.severity}
+                                  </div>
+                                </div>
+                                <p style={{ fontSize:14, lineHeight:1.6, color:"#d1d5db", margin:"0 0 12px 0" }}>
+                                  {flag.message}
+                                </p>
+                                {beginnerMode && (
+                                  <div style={{
+                                    marginBottom:12,
+                                    padding:16,
+                                    background:"rgba(59, 130, 246, 0.08)",
+                                    border:"1px solid rgba(59, 130, 246, 0.2)",
+                                    borderRadius:6
+                                  }}>
+                                    <div style={{ fontSize:13, fontWeight:600, color:"#60a5fa", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                                      Beginner Explanation
+                                    </div>
+                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                      <strong style={{ color:"#ffffff" }}>What's happening:</strong> {getBeginnerExplanation(flag.id).simple}
+                                    </div>
+                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                      <strong style={{ color:"#ffffff" }}>Impact:</strong> {getBeginnerExplanation(flag.id).impact}
+                                    </div>
+                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                      <strong style={{ color:"#ffffff" }}>Think of it like:</strong> {getBeginnerExplanation(flag.id).analogy}
+                                    </div>
+                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb" }}>
+                                      <strong style={{ color:"#10b981" }}>How to fix:</strong> {getBeginnerExplanation(flag.id).fix}
+                                    </div>
+                                  </div>
+                                )}
+                                {flag.hint && (
+                                  <div style={{
+                                    padding:12,
+                                    background:"rgba(0, 0, 0, 0.3)",
+                                    borderRadius:6,
+                                    fontSize:13,
+                                    color:"#9ca3af",
+                                    fontFamily:"'JetBrains Mono', monospace",
+                                    lineHeight:1.5,
+                                    marginBottom:12
+                                  }}>
+                                    <strong style={{ color: colors.text }}>Hint:</strong> {flag.hint}
+                                  </div>
+                                )}
+                                {flag.complexity && (
+                                  <div style={{ fontSize:12, color: colors.text, fontWeight:500, marginBottom:12 }}>
+                                    Time Complexity: {flag.complexity}
+                                  </div>
+                                )}
+                                {/* Show affected files */}
+                                <div style={{
+                                  marginTop:12,
+                                  padding:12,
+                                  background:"rgba(0, 0, 0, 0.2)",
+                                  borderRadius:6,
+                                  fontSize:12
+                                }}>
+                                  <strong style={{ color:"#9ca3af" }}>Found in {flag.files.length} file{flag.files.length > 1 ? 's' : ''}:</strong>
+                                  <div style={{ marginTop:8, display:"flex", flexWrap:"wrap", gap:6 }}>
+                                    {flag.files.slice(0, 5).map((file, fi) => (
+                                      <div key={fi} style={{
+                                        padding:"4px 8px",
+                                        background:"rgba(255,255,255,0.05)",
+                                        border:"1px solid rgba(255,255,255,0.1)",
+                                        borderRadius:4,
+                                        color:"#e5e7eb",
+                                        fontSize:11,
+                                        fontFamily:"'JetBrains Mono', monospace"
+                                      }}>
+                                        {file.split('/').pop()}
+                                      </div>
+                                    ))}
+                                    {flag.files.length > 5 && (
+                                      <div style={{
+                                        padding:"4px 8px",
+                                        color:"#9ca3af",
+                                        fontSize:11
+                                      }}>
+                                        +{flag.files.length - 5} more
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
+
+                      {/* Files Summary - Collapsible */}
+                      <div style={{ marginBottom:24 }}>
+                        <h3 style={{ fontSize:20, fontWeight:600, marginBottom:16, color:"#ffffff" }}>
+                          Files Analyzed ({result.data.results.length})
+                        </h3>
+                        {result.data.results.map((fileResult, i) => (
+                          <div key={i} style={{
+                            padding:20,
+                            marginBottom:12,
+                            background:"rgba(255,255,255,0.03)",
+                            border:"1px solid rgba(255,255,255,0.1)",
+                            borderRadius:8
+                          }}>
+                            <h4 style={{ fontSize:14, fontWeight:500, color:"#ffffff", marginBottom:8, fontFamily:"'JetBrains Mono', monospace" }}>
+                              {fileResult.path}
+                            </h4>
+                            {fileResult.error ? (
+                              <p style={{ color:"#ef4444", fontSize:14, margin:0 }}>
+                                Error: {fileResult.error}
+                              </p>
+                            ) : (
+                              <div style={{ display:"flex", gap:16, fontSize:14 }}>
+                                <span style={{ color:"#10b981" }}>
+                                  ✓ {fileResult.analysis.stats.passed} passed
+                                </span>
+                                <span style={{ color: fileResult.analysis.stats.failed > 0 ? "#ef4444" : "#6b7280" }}>
+                                  {fileResult.analysis.stats.failed > 0 ? "✗" : "—"} {fileResult.analysis.stats.failed} failed
+                                </span>
+                                <span style={{ color:"#9ca3af" }}>
+                                  {fileResult.analysis.stats.complexity}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </>
+                  );
+                })()}
               </div>
             )}
           </div>
