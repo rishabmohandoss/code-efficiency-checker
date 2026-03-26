@@ -1199,23 +1199,28 @@ function App() {
                 {(() => {
                   const aggregated = result.data.results.reduce((acc, file) => {
                     if (!file.error && file.analysis) {
-                      acc.totalPassed += file.analysis.stats.passed;
-                      acc.totalFailed += file.analysis.stats.failed;
+                      acc.totalPassed += file.analysis.stats.passed || 0;
+                      acc.totalFailed += file.analysis.stats.failed || 0;
                       acc.filesAnalyzed += 1;
-                      // Collect all unique flags
-                      file.analysis.flags.forEach(flag => {
+
+                      // Collect all unique flags/issues (handle both performance and security mode)
+                      const issues = file.analysis.allIssues || file.analysis.flags || [];
+                      issues.forEach(flag => {
                         const key = flag.id;
                         if (!acc.flagsMap.has(key)) {
                           acc.flagsMap.set(key, { ...flag, files: [] });
                         }
                         acc.flagsMap.get(key).files.push(file.path);
                       });
-                      // Track worst complexity
-                      const complexityScores = { 'O(2ⁿ) worst': 10, 'O(n³)': 9, 'O(n² log n)': 7, 'O(n²)': 6, 'O(n log n)': 3, 'O(n)': 1 };
-                      const score = complexityScores[file.analysis.stats.complexity] || 0;
-                      if (score > acc.worstComplexityScore) {
-                        acc.worstComplexityScore = score;
-                        acc.worstComplexity = file.analysis.stats.complexity;
+
+                      // Track worst complexity (performance mode only)
+                      if (file.analysis.stats.complexity) {
+                        const complexityScores = { 'O(2ⁿ) worst': 10, 'O(n³)': 9, 'O(n² log n)': 7, 'O(n²)': 6, 'O(n log n)': 3, 'O(n)': 1 };
+                        const score = complexityScores[file.analysis.stats.complexity] || 0;
+                        if (score > acc.worstComplexityScore) {
+                          acc.worstComplexityScore = score;
+                          acc.worstComplexity = file.analysis.stats.complexity;
+                        }
                       }
                     }
                     return acc;
@@ -1223,6 +1228,14 @@ function App() {
 
                   const aggregatedFlags = Array.from(aggregated.flagsMap.values());
                   const uniqueIssues = aggregatedFlags.length;
+
+                  // Calculate severity breakdown for security mode
+                  const severityBreakdown = result.analysisMode === "security" ? {
+                    critical: aggregatedFlags.filter(f => f.severity === 'CRITICAL').length,
+                    high: aggregatedFlags.filter(f => f.severity === 'HIGH').length,
+                    medium: aggregatedFlags.filter(f => f.severity === 'MEDIUM').length,
+                    low: aggregatedFlags.filter(f => f.severity === 'LOW').length
+                  } : null;
 
                   return (
                     <>
@@ -1233,12 +1246,17 @@ function App() {
                         gap:16,
                         marginBottom:24
                       }}>
-                        {[
+                        {(result.analysisMode === "security" ? [
+                          { label: "Files Analyzed", value: aggregated.filesAnalyzed, color: "#6b7280" },
+                          { label: "Critical Issues", value: severityBreakdown.critical, color: severityBreakdown.critical > 0 ? "#ef4444" : "#6b7280" },
+                          { label: "High Issues", value: severityBreakdown.high, color: severityBreakdown.high > 0 ? "#f97316" : "#6b7280" },
+                          { label: "Total Issues", value: uniqueIssues, color: uniqueIssues > 0 ? "#ef4444" : "#10b981" }
+                        ] : [
                           { label: "Files Analyzed", value: aggregated.filesAnalyzed, color: "#6b7280" },
                           { label: "Unique Issues", value: uniqueIssues, color: uniqueIssues > 0 ? "#ef4444" : "#10b981" },
                           { label: "Total Flags", value: aggregated.totalFailed, color: aggregated.totalFailed > 0 ? "#ef4444" : "#10b981" },
                           { label: "Worst Complexity", value: aggregated.worstComplexity, color: "#8b5cf6" }
-                        ].map((stat, i) => (
+                        ]).map((stat, i) => (
                           <div key={i} style={{
                             padding:20,
                             background:"rgba(255,255,255,0.03)",
@@ -1340,31 +1358,39 @@ function App() {
                                 <p style={{ fontSize:14, lineHeight:1.6, color:"#d1d5db", margin:"0 0 12px 0" }}>
                                   {flag.message}
                                 </p>
-                                {beginnerMode && (
-                                  <div style={{
-                                    marginBottom:12,
-                                    padding:16,
-                                    background:"rgba(59, 130, 246, 0.08)",
-                                    border:"1px solid rgba(59, 130, 246, 0.2)",
-                                    borderRadius:6
-                                  }}>
-                                    <div style={{ fontSize:13, fontWeight:600, color:"#60a5fa", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.5px" }}>
-                                      Beginner Explanation
+                                {beginnerMode && (() => {
+                                  const explanation = result.analysisMode === "security"
+                                    ? getSecurityBeginnerExplanation(flag.id)
+                                    : getBeginnerExplanation(flag.id);
+
+                                  if (!explanation) return null;
+
+                                  return (
+                                    <div style={{
+                                      marginBottom:12,
+                                      padding:16,
+                                      background:"rgba(59, 130, 246, 0.08)",
+                                      border:"1px solid rgba(59, 130, 246, 0.2)",
+                                      borderRadius:6
+                                    }}>
+                                      <div style={{ fontSize:13, fontWeight:600, color:"#60a5fa", marginBottom:8, textTransform:"uppercase", letterSpacing:"0.5px" }}>
+                                        Beginner Explanation
+                                      </div>
+                                      <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                        <strong style={{ color:"#ffffff" }}>What's happening:</strong> {explanation.what || explanation.simple}
+                                      </div>
+                                      <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                        <strong style={{ color:"#ffffff" }}>Impact:</strong> {explanation.impact}
+                                      </div>
+                                      <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
+                                        <strong style={{ color:"#ffffff" }}>Think of it like:</strong> {explanation.analogy}
+                                      </div>
+                                      <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb" }}>
+                                        <strong style={{ color:"#10b981" }}>How to fix:</strong> {explanation.fix}
+                                      </div>
                                     </div>
-                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
-                                      <strong style={{ color:"#ffffff" }}>What's happening:</strong> {getBeginnerExplanation(flag.id).simple}
-                                    </div>
-                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
-                                      <strong style={{ color:"#ffffff" }}>Impact:</strong> {getBeginnerExplanation(flag.id).impact}
-                                    </div>
-                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb", marginBottom:10 }}>
-                                      <strong style={{ color:"#ffffff" }}>Think of it like:</strong> {getBeginnerExplanation(flag.id).analogy}
-                                    </div>
-                                    <div style={{ fontSize:14, lineHeight:1.6, color:"#e5e7eb" }}>
-                                      <strong style={{ color:"#10b981" }}>How to fix:</strong> {getBeginnerExplanation(flag.id).fix}
-                                    </div>
-                                  </div>
-                                )}
+                                  );
+                                })()}
                                 {flag.hint && (
                                   <div style={{
                                     padding:12,
@@ -1446,15 +1472,33 @@ function App() {
                               </p>
                             ) : (
                               <div style={{ display:"flex", gap:16, fontSize:14 }}>
-                                <span style={{ color:"#10b981" }}>
-                                  ✓ {fileResult.analysis.stats.passed} passed
-                                </span>
-                                <span style={{ color: fileResult.analysis.stats.failed > 0 ? "#ef4444" : "#6b7280" }}>
-                                  {fileResult.analysis.stats.failed > 0 ? "✗" : "—"} {fileResult.analysis.stats.failed} failed
-                                </span>
-                                <span style={{ color:"#9ca3af" }}>
-                                  {fileResult.analysis.stats.complexity}
-                                </span>
+                                {result.analysisMode === "security" ? (
+                                  <>
+                                    <span style={{ color: fileResult.analysis.stats.critical > 0 ? "#ef4444" : "#6b7280" }}>
+                                      {fileResult.analysis.stats.critical > 0 ? "🔴" : "—"} {fileResult.analysis.stats.critical} critical
+                                    </span>
+                                    <span style={{ color: fileResult.analysis.stats.high > 0 ? "#f97316" : "#6b7280" }}>
+                                      {fileResult.analysis.stats.high > 0 ? "🟠" : "—"} {fileResult.analysis.stats.high} high
+                                    </span>
+                                    <span style={{ color:"#9ca3af" }}>
+                                      Score: {fileResult.analysis.securityScore || 0}/100
+                                    </span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span style={{ color:"#10b981" }}>
+                                      ✓ {fileResult.analysis.stats.passed || 0} passed
+                                    </span>
+                                    <span style={{ color: fileResult.analysis.stats.failed > 0 ? "#ef4444" : "#6b7280" }}>
+                                      {fileResult.analysis.stats.failed > 0 ? "✗" : "—"} {fileResult.analysis.stats.failed} failed
+                                    </span>
+                                    {fileResult.analysis.stats.complexity && (
+                                      <span style={{ color:"#9ca3af" }}>
+                                        {fileResult.analysis.stats.complexity}
+                                      </span>
+                                    )}
+                                  </>
+                                )}
                               </div>
                             )}
                           </div>
