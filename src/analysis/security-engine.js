@@ -70,6 +70,7 @@ export function runSecurityAnalysis(code, language = 'javascript') {
   detectDataProtection(code, lines, results, language);
   detectEnvironmentVariables(code, lines, results, language);
   detectConfigurationIssues(code, lines, results, language);
+  detectDependencyIssues(code, lines, results, language);
 
   // Calculate final stats
   results.stats.critical = results.critical.length;
@@ -1300,6 +1301,245 @@ function detectConfigurationIssues(code, lines, results, language) {
   results.stats.rulesChecked += 7; // Rules 46-52
 }
 
+/**
+ * Category 7: Dependency & Supply Chain Security (Rules 41-45)
+ */
+function detectDependencyIssues(code, lines, results, language) {
+  const issues = [];
+
+  // Check if this is a package.json file or contains dependency information
+  const isPackageJson = code.includes('"dependencies"') || code.includes('"devDependencies"');
+  const hasRequire = /require\s*\(\s*['"][^'"]+['"]\s*\)/g.test(code);
+  const hasImport = /import\s+.*\s+from\s+['"][^'"]+['"]/g.test(code);
+
+  // Rule 41: Outdated Dependencies
+  // Pattern: Look for old version patterns and common outdated packages
+  const knownOutdatedPatterns = [
+    { pattern: /["']request["']:\s*["']\^?[0-2]\./gi, name: 'request', reason: 'deprecated, use axios or node-fetch' },
+    { pattern: /["']moment["']:\s*["']\^?[0-2]\.[0-9]/gi, name: 'moment', reason: 'large bundle, use date-fns or dayjs' },
+    { pattern: /["']lodash["']:\s*["']\^?[0-4]\.[0-9]/gi, name: 'lodash', reason: 'old version, update to latest' },
+    { pattern: /["']express["']:\s*["']\^?[0-3]\./gi, name: 'express', reason: 'old version with known vulnerabilities' },
+    { pattern: /["']axios["']:\s*["']\^?0\.[0-1][0-9]/gi, name: 'axios', reason: 'very old version, update to 1.x' },
+    { pattern: /["']react["']:\s*["']\^?1[0-5]\./gi, name: 'react', reason: 'old version, update to React 18+' },
+    { pattern: /["']next["']:\s*["']\^?[0-9]\./gi, name: 'next', reason: 'old version, update to Next 13+' }
+  ];
+
+  lines.forEach((line, index) => {
+    knownOutdatedPatterns.forEach(({ pattern, name, reason }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'outdated-dependency',
+          SEVERITY.HIGH,
+          `Outdated Dependency: ${name}`,
+          `Your package.json includes an outdated version of ${name}. Outdated packages may contain known security vulnerabilities (CVEs) that attackers can exploit. Old versions also lack bug fixes and security patches.`,
+          `Update ${name} to the latest version: npm update ${name} or npm install ${name}@latest. Check for breaking changes in the release notes. Run npm audit to check for vulnerabilities. Reason: ${reason}`,
+          index + 1,
+          'Dependencies'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Check for general old version patterns in package.json
+  if (isPackageJson) {
+    // Detect very old major versions (0.x, 1.x for commonly updated packages)
+    const oldVersionPattern = /["'][^"']+["']:\s*["']\^?0\.[0-9]+\.[0-9]+["']/gi;
+    lines.forEach((line, index) => {
+      if (oldVersionPattern.test(line) && !line.includes('//')) {
+        const packageMatch = line.match(/["']([^"']+)["']:\s*["']\^?0\./);
+        if (packageMatch) {
+          const packageName = packageMatch[1];
+          // Skip packages that commonly use 0.x versioning
+          if (!['prettier', 'eslint', 'webpack'].includes(packageName)) {
+            const issue = createIssue(
+              'very-old-dependency',
+              SEVERITY.HIGH,
+              'Very Old Dependency Version',
+              `Package "${packageName}" is on a pre-1.0 version (0.x). These versions may be unstable, unmaintained, or have known security vulnerabilities. Pre-release versions often have breaking changes and lack long-term support.`,
+              `Check if a stable 1.x+ version exists: npm info ${packageName}. If available, update with: npm install ${packageName}@latest. Review changelog for breaking changes. Consider alternatives if the package is abandoned.`,
+              index + 1,
+              'Dependencies'
+            );
+            issues.push(issue);
+          }
+        }
+      }
+    });
+  }
+
+  // Rule 42: Dependencies with Malware
+  // Known malicious package patterns and typosquatting
+  const suspiciousPatterns = [
+    { pattern: /["']event-stream["']:\s*["']3\.3\.6["']/gi, name: 'event-stream@3.3.6', reason: 'contained bitcoin-stealing malware' },
+    { pattern: /["']eslint-scope["']:\s*["']3\.7\.2["']/gi, name: 'eslint-scope@3.7.2', reason: 'contained credential harvester' },
+    { pattern: /["']crossenv["']/gi, name: 'crossenv', reason: 'typosquatting attack (correct: cross-env)' },
+    { pattern: /["']babelcli["']/gi, name: 'babelcli', reason: 'typosquatting attack (correct: babel-cli)' },
+    { pattern: /["']cros-env["']/gi, name: 'cros-env', reason: 'typosquatting attack (correct: cross-env)' },
+  ];
+
+  lines.forEach((line, index) => {
+    suspiciousPatterns.forEach(({ pattern, name, reason }) => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'malicious-dependency',
+          SEVERITY.CRITICAL,
+          `Potentially Malicious Package: ${name}`,
+          `Your dependencies include "${name}" which is a known malicious package or typosquatting attack. Malicious packages can steal credentials, inject backdoors, mine cryptocurrency, or exfiltrate sensitive data from your server.`,
+          `Remove this package immediately: npm uninstall ${name.split('@')[0]}. Install the correct package if this was a typo. Scan your codebase for any unauthorized changes. Rotate all credentials. Reason: ${reason}`,
+          index + 1,
+          'Dependencies'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Check for common typosquatting patterns
+  const commonTypos = [
+    { wrong: 'reacct', correct: 'react' },
+    { wrong: 'loadsh', correct: 'lodash' },
+    { wrong: 'expres', correct: 'express' },
+    { wrong: 'mongo-db', correct: 'mongodb' },
+    { wrong: 'socket-io', correct: 'socket.io' }
+  ];
+
+  lines.forEach((line, index) => {
+    commonTypos.forEach(({ wrong, correct }) => {
+      const typoPattern = new RegExp(`["']${wrong}["']`, 'gi');
+      if (typoPattern.test(line)) {
+        const issue = createIssue(
+          'typosquatting-risk',
+          SEVERITY.HIGH,
+          `Possible Typosquatting: "${wrong}"`,
+          `Your dependencies include "${wrong}" which may be a typosquatting attack targeting "${correct}". Attackers register packages with names similar to popular packages to trick developers. These malicious packages can steal data or inject malware.`,
+          `Verify this is intentional. If it's a typo, uninstall and install the correct package: npm uninstall ${wrong} && npm install ${correct}. Always double-check package names before installing.`,
+          index + 1,
+          'Dependencies'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 43: Unused Dependencies
+  if (isPackageJson) {
+    // Extract declared dependencies
+    const dependencyMatches = code.match(/["']([a-z0-9-_@/]+)["']:\s*["'][^"']+["']/gi);
+    if (dependencyMatches) {
+      const declaredPackages = dependencyMatches
+        .map(match => {
+          const nameMatch = match.match(/["']([a-z0-9-_@/]+)["']:/i);
+          return nameMatch ? nameMatch[1] : null;
+        })
+        .filter(name => name && !['name', 'version', 'description', 'main', 'scripts', 'keywords', 'author', 'license'].includes(name));
+
+      // Check if packages are used in code (simple heuristic)
+      const unusedPackages = declaredPackages.filter(pkg => {
+        // Skip common utility packages that might not have direct imports
+        const skipCheck = ['nodemon', 'eslint', 'prettier', 'jest', 'mocha', 'chai', 'typescript', 'webpack', 'vite', 'ts-node'];
+        if (skipCheck.includes(pkg)) return false;
+
+        // Check for require() or import statements
+        const pkgName = pkg.replace('@', '').replace(/\//g, '-');
+        const requirePattern = new RegExp(`require\\s*\\(\\s*['"]${pkg}['"]\\s*\\)`, 'i');
+        const importPattern = new RegExp(`import\\s+.*\\s+from\\s+['"]${pkg}['"]`, 'i');
+
+        return !requirePattern.test(code) && !importPattern.test(code);
+      });
+
+      if (unusedPackages.length > 0 && unusedPackages.length <= 5) {
+        unusedPackages.forEach(pkg => {
+          const issue = createIssue(
+            'unused-dependency',
+            SEVERITY.LOW,
+            `Unused Dependency: ${pkg}`,
+            `Package "${pkg}" is declared in dependencies but doesn't appear to be imported or required anywhere in your code. Unused dependencies increase bundle size, installation time, and attack surface. They also clutter your dependency tree.`,
+            `If truly unused, remove it: npm uninstall ${pkg}. If it's used indirectly or in files not analyzed, you can ignore this warning. Consider using tools like depcheck to scan your entire project.`,
+            null,
+            'Dependencies'
+          );
+          issues.push(issue);
+        });
+      }
+    }
+  }
+
+  // Rule 44: Missing Lock Files
+  // This is a project-level check - we can only detect if code references lock files
+  const hasLockFileReference = /package-lock\.json|yarn\.lock|pnpm-lock\.yaml/gi.test(code);
+  const hasPackageJsonReference = /package\.json/gi.test(code);
+
+  if (hasPackageJsonReference && !hasLockFileReference) {
+    // Check if there's any mention of npm install without ci
+    const hasNpmInstall = /npm\s+install(?!\s+--frozen-lockfile)/gi.test(code);
+    if (hasNpmInstall || isPackageJson) {
+      const issue = createIssue(
+        'missing-lock-file',
+        SEVERITY.MEDIUM,
+        'Missing Dependency Lock File',
+        'Your project may not have a lock file (package-lock.json, yarn.lock, or pnpm-lock.yaml). Without lock files, different team members and CI/CD environments may install different versions of dependencies, leading to "works on my machine" bugs and potential security issues.',
+        'Generate a lock file: Run npm install (creates package-lock.json), yarn install (creates yarn.lock), or pnpm install (creates pnpm-lock.yaml). Commit the lock file to version control. Use npm ci instead of npm install in CI/CD for deterministic builds.',
+        null,
+        'Dependencies'
+      );
+      results.medium.push(issue);
+      results.allIssues.push(issue);
+    }
+  }
+
+  // Rule 45: Vulnerable Transitive Dependencies
+  // Check for patterns indicating npm audit issues
+  const hasAuditKeywords = /vulnerabilit|CVE-|security\s+advisory|high\s+severity|critical\s+severity/gi.test(code);
+  const hasAuditCommand = /npm\s+audit(?!\s+fix)|yarn\s+audit/gi.test(code);
+
+  if (hasAuditCommand || (isPackageJson && code.length > 500)) {
+    const issue = createIssue(
+      'potential-vulnerable-dependencies',
+      SEVERITY.HIGH,
+      'Potential Vulnerable Dependencies',
+      'Your project may have dependencies with known security vulnerabilities. Transitive (indirect) dependencies can contain CVEs even if your direct dependencies are up-to-date. Attackers actively scan for and exploit known vulnerabilities.',
+      'Run npm audit to check for vulnerabilities. Fix them with: npm audit fix (for compatible updates) or npm audit fix --force (for breaking changes). Review each vulnerability carefully. Consider using tools like Snyk or Dependabot for continuous monitoring.',
+      null,
+      'Dependencies'
+    );
+    results.high.push(issue);
+    results.allIssues.push(issue);
+  }
+
+  // Additional check: Detect if npm audit output is pasted in code/comments
+  lines.forEach((line, index) => {
+    if (/\d+\s+vulnerabilit(y|ies)|found\s+\d+\s+(high|critical)/gi.test(line)) {
+      const issue = createIssue(
+        'vulnerabilities-detected',
+        SEVERITY.CRITICAL,
+        'Known Vulnerabilities Detected',
+        'Your code contains output from npm audit showing known vulnerabilities. These are confirmed security issues that attackers can exploit. Critical and high-severity vulnerabilities pose immediate risk to your application and data.',
+        'Fix all vulnerabilities immediately: Run npm audit fix. For breaking changes, use npm audit fix --force or manually update packages. Review the security advisories for each CVE. Test thoroughly after updates. Consider using npm audit --production to focus on production dependencies.',
+        index + 1,
+        'Dependencies'
+      );
+      issues.push(issue);
+    }
+  });
+
+  // Add all dependency issues
+  issues.forEach(issue => {
+    if (issue.severity === SEVERITY.CRITICAL) {
+      results.critical.push(issue);
+    } else if (issue.severity === SEVERITY.HIGH) {
+      results.high.push(issue);
+    } else if (issue.severity === SEVERITY.MEDIUM) {
+      results.medium.push(issue);
+    } else if (issue.severity === SEVERITY.LOW) {
+      results.low.push(issue);
+    }
+    results.allIssues.push(issue);
+  });
+
+  results.stats.rulesChecked += 5; // Rules 41-45
+}
+
 // Helper function to get beginner-friendly explanations
 export function getBeginnerExplanation(issueId) {
   const explanations = {
@@ -1356,6 +1596,42 @@ export function getBeginnerExplanation(issueId) {
       impact: 'Without httpOnly: JavaScript malware can steal cookies. Without secure: cookies sent over HTTP can be intercepted. Without sameSite: your site is vulnerable to CSRF attacks where attackers trick users into making requests.',
       analogy: 'Like writing your password on a postcard (not an envelope) and mailing it - everyone who handles the mail can read it.',
       fix: 'Always set all three flags when creating cookies: res.cookie("token", value, { httpOnly: true, secure: true, sameSite: "strict" }); This prevents XSS, ensures HTTPS, and stops CSRF.'
+    },
+    'outdated-dependency': {
+      what: 'Your package.json uses old versions of libraries. These old versions have known security holes (CVEs) that hackers actively exploit.',
+      impact: 'The Equifax breach (2017) happened because of an outdated library. 147 million people\'s data was stolen. Hackers scan for old versions and exploit known vulnerabilities.',
+      analogy: 'Like using a lock that everyone knows is broken. Thieves have the key published online - they just need to find your door.',
+      fix: 'Update packages regularly: npm update packageName or npm install packageName@latest. Check for breaking changes in the changelog. Run npm audit to find vulnerabilities.'
+    },
+    'malicious-dependency': {
+      what: 'You installed a package that\'s actually malware or a typo (typosquatting). It looks like a real package but with a slightly different name.',
+      impact: 'The event-stream hack (2018) stole Bitcoin from developers by hiding malware in a popular package. Typosquatting attacks trick you into installing malicious code that steals credentials or injects backdoors.',
+      analogy: 'Like ordering "Coca-Cola" but accidentally buying "Coca-C0la" (with a zero) from a sketchy store - looks similar but it\'s poison.',
+      fix: 'Remove immediately: npm uninstall packageName. Double-check package names before installing. Use npm install --save-exact to lock versions. Check download counts and GitHub repos of packages.'
+    },
+    'unused-dependency': {
+      what: 'Your package.json lists packages you don\'t actually use in your code. They still get installed and take up space.',
+      impact: 'Unused packages increase your attack surface - more code means more potential vulnerabilities. They also slow down npm install and bloat your node_modules folder.',
+      analogy: 'Like carrying a heavy backpack full of tools you never use - it just slows you down and makes you an easier target.',
+      fix: 'Remove unused packages: npm uninstall packageName. Use tools like "depcheck" to find all unused dependencies across your project. Keep your dependencies clean and minimal.'
+    },
+    'missing-lock-file': {
+      what: 'You don\'t have a package-lock.json file. Without it, npm installs different versions of packages each time, causing "works on my machine" bugs.',
+      impact: 'Your teammate or CI server might install newer versions with bugs or security issues. Without lock files, builds aren\'t reproducible - what works today might break tomorrow.',
+      analogy: 'Like a recipe that says "add some flour" instead of "add 2 cups flour" - everyone makes it differently and results vary.',
+      fix: 'Generate lock file: Run npm install (creates package-lock.json). Commit it to git. In CI/CD, use npm ci instead of npm install to use the exact versions in the lock file.'
+    },
+    'potential-vulnerable-dependencies': {
+      what: 'Your dependencies (including indirect ones) may have known security vulnerabilities. Even if you update your direct packages, their dependencies might be vulnerable.',
+      impact: 'Transitive dependencies are the #1 source of vulnerabilities. You might not even know you\'re using a vulnerable package because it\'s installed automatically by something else.',
+      analogy: 'Like hiring a contractor who hires subcontractors - you trust the contractor, but one of their subcontractors is a thief.',
+      fix: 'Run npm audit to scan for vulnerabilities. Fix with npm audit fix. For breaking changes, use npm audit fix --force. Use Snyk or Dependabot for continuous monitoring.'
+    },
+    'vulnerabilities-detected': {
+      what: 'npm audit found confirmed security vulnerabilities in your dependencies. These are real, documented security holes (CVEs) that hackers know about.',
+      impact: 'Critical vulnerabilities can lead to remote code execution - hackers can take complete control of your server. High severity issues can leak data or crash your app.',
+      analogy: 'Like a security guard telling you "there\'s a known burglar hiding in your house" - you need to act immediately, not ignore it.',
+      fix: 'Fix immediately: Run npm audit fix to update packages. Review each CVE to understand the risk. Test your app after updates. For unfixable issues, consider alternative packages.'
     }
   };
 
