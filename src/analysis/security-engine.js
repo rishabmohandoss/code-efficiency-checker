@@ -68,6 +68,8 @@ export function runSecurityAnalysis(code, language = 'javascript') {
   detectOWASP(code, lines, results, language);
   detectAuthIssues(code, lines, results, language);
   detectDataProtection(code, lines, results, language);
+  detectEnvironmentVariables(code, lines, results, language);
+  detectConfigurationIssues(code, lines, results, language);
 
   // Calculate final stats
   results.stats.critical = results.critical.length;
@@ -897,6 +899,407 @@ function detectDataProtection(code, lines, results, language) {
   results.stats.rulesChecked += 5; // Rules 34-38 (Rule 33 is PII in logs, skipped for now)
 }
 
+/**
+ * Category 5: Environment Variable Usage (Rules 11-15)
+ */
+function detectEnvironmentVariables(code, lines, results, language) {
+  const issues = [];
+
+  // Rule 11: Missing .env.example
+  // This is a file-level check, we can only detect if code references env vars without documentation
+  const hasEnvVars = /process\.env\.|os\.getenv\(|System\.getenv\(/gi.test(code);
+  const hasEnvExample = code.includes('.env.example') || code.includes('ENV_EXAMPLE');
+
+  if (hasEnvVars && !hasEnvExample) {
+    // Note: This is a soft check - we can't actually verify the file exists
+    const issue = createIssue(
+      'missing-env-example',
+      SEVERITY.MEDIUM,
+      'Missing .env.example Documentation',
+      'Your code uses environment variables but doesn\'t appear to document them. Without a .env.example file, other developers won\'t know which environment variables are required to run your application.',
+      'Create a .env.example file in your repository root with placeholder values for all required environment variables. Example: API_KEY=your_api_key_here, DATABASE_URL=your_database_url_here. Never commit the actual .env file.',
+      null,
+      'Environment Variables'
+    );
+    results.medium.push(issue);
+    results.allIssues.push(issue);
+  }
+
+  // Rule 12: .env in Git
+  lines.forEach((line, index) => {
+    // Check for .env file being tracked or committed
+    if (line.includes('.env') && (
+        line.includes('git add') ||
+        line.includes('git commit') ||
+        (line.includes('.gitignore') && line.includes('!') && line.includes('.env'))
+      )) {
+      const issue = createIssue(
+        'env-in-git',
+        SEVERITY.CRITICAL,
+        '.env File Tracked in Git',
+        'Your .env file appears to be tracked by git. This means all your secrets (API keys, passwords, database URLs) will be stored in git history forever, even if you delete the file later. Anyone with access to your repository can see all your secrets.',
+        'Add .env to .gitignore immediately: echo ".env" >> .gitignore. Then remove from git history: git rm --cached .env && git commit -m "Remove .env from git". If already pushed, consider all secrets compromised and rotate them.',
+        index + 1,
+        'Environment Variables'
+      );
+      issues.push(issue);
+    }
+
+    // Check for .gitignore NOT ignoring .env
+    if (line.trim() === '.gitignore' || line.includes('gitignore:')) {
+      const gitignoreContext = lines.slice(Math.max(0, index - 5), Math.min(lines.length, index + 20)).join('\n');
+      if (!gitignoreContext.includes('.env') || gitignoreContext.includes('!.env')) {
+        const issue = createIssue(
+          'env-not-in-gitignore',
+          SEVERITY.CRITICAL,
+          '.env Not in .gitignore',
+          'Your .gitignore file doesn\'t properly exclude .env files. This means .env files could be accidentally committed to version control, exposing all your secrets to anyone with repository access.',
+          'Add these lines to your .gitignore file:\n.env\n.env.local\n.env.*.local\n\nThis prevents environment files from being committed.',
+          index + 1,
+          'Environment Variables'
+        );
+        issues.push(issue);
+      }
+    }
+  });
+
+  // Rule 13: Direct process.env Access Without Fallback
+  const unsafeEnvPatterns = [
+    /process\.env\.(?!NODE_ENV)[A-Z_]+(?!\s*\|\|)/g,
+    /os\.getenv\(['"](?!PATH)[^'"]+['"]\)(?!\s*or\s)/g
+  ];
+
+  lines.forEach((line, index) => {
+    unsafeEnvPatterns.forEach(pattern => {
+      if (pattern.test(line) && !line.includes('||') && !line.includes('??') && !line.includes('if')) {
+        const issue = createIssue(
+          'unsafe-env-access',
+          SEVERITY.MEDIUM,
+          'Environment Variable Used Without Fallback',
+          'Your code accesses environment variables without checking if they exist or providing defaults. If the variable is missing, your application will crash or behave unpredictably in production.',
+          'Always validate environment variables at startup or provide defaults: const apiKey = process.env.API_KEY || throwError("API_KEY missing"); or use a validation library like joi or envalid to validate all required env vars on startup.',
+          index + 1,
+          'Environment Variables'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 14: Environment Variables in Client-Side Code
+  if (language === 'javascript' || language === 'typescript') {
+    const clientSideFrameworks = [
+      'react', 'vue', 'angular', 'svelte',
+      'useState', 'useEffect', 'component',
+      'render(', 'return (', '<div', '<App'
+    ];
+
+    const hasClientSideCode = clientSideFrameworks.some(framework =>
+      code.toLowerCase().includes(framework.toLowerCase())
+    );
+
+    if (hasClientSideCode) {
+      lines.forEach((line, index) => {
+        // Check for secrets in client-side code
+        if (line.includes('process.env') && (
+            line.toLowerCase().includes('secret') ||
+            line.toLowerCase().includes('password') ||
+            line.toLowerCase().includes('key') ||
+            line.toLowerCase().includes('token')
+          )) {
+          // Skip public keys and REACT_APP_ prefixes (which are safe for client-side)
+          if (!line.includes('REACT_APP_') &&
+              !line.includes('NEXT_PUBLIC_') &&
+              !line.includes('VITE_') &&
+              !line.includes('PUBLIC_')) {
+            const issue = createIssue(
+              'secrets-in-client-code',
+              SEVERITY.HIGH,
+              'Secrets in Client-Side Code',
+              'Your client-side code (React/Vue/Angular) accesses secret environment variables. Client-side code is bundled and sent to browsers - anyone can read it by viewing your JavaScript files. All secrets will be exposed.',
+              'Only use environment variables for PUBLIC values in client-side code (prefixed with REACT_APP_, NEXT_PUBLIC_, or VITE_). Keep secrets on the server: Create API endpoints on your backend that use the secrets, and have your frontend call those APIs.',
+              index + 1,
+              'Environment Variables'
+            );
+            issues.push(issue);
+          }
+        }
+      });
+    }
+  }
+
+  // Rule 15: Insecure Environment Variable Names
+  const insecureVarNames = [
+    /process\.env\.PASSWORD(?![_A-Z])/g,
+    /process\.env\.SECRET(?![_A-Z])/g,
+    /process\.env\.KEY(?![_A-Z])/g,
+    /process\.env\.TOKEN(?![_A-Z])/g,
+    /os\.getenv\(['"]PASSWORD['"]\)/g,
+    /os\.getenv\(['"]SECRET['"]\)/g
+  ];
+
+  lines.forEach((line, index) => {
+    insecureVarNames.forEach(pattern => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'insecure-env-names',
+          SEVERITY.LOW,
+          'Non-Descriptive Environment Variable Names',
+          'Your environment variable names are too generic (PASSWORD, SECRET, KEY). In larger applications with multiple services, this causes confusion - which password? Which secret? Developers might set the wrong values.',
+          'Use descriptive, namespaced environment variable names. Examples: DB_PASSWORD, JWT_SECRET, STRIPE_API_KEY, AWS_ACCESS_KEY. This makes configuration clearer and prevents mistakes.',
+          index + 1,
+          'Environment Variables'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Add all environment variable issues
+  issues.forEach(issue => {
+    if (issue.severity === SEVERITY.CRITICAL) {
+      results.critical.push(issue);
+    } else if (issue.severity === SEVERITY.HIGH) {
+      results.high.push(issue);
+    } else if (issue.severity === SEVERITY.MEDIUM) {
+      results.medium.push(issue);
+    } else if (issue.severity === SEVERITY.LOW) {
+      results.low.push(issue);
+    }
+    results.allIssues.push(issue);
+  });
+
+  results.stats.rulesChecked += 5; // Rules 11-15
+}
+
+/**
+ * Category 6: Configuration Security (Rules 46-52)
+ */
+function detectConfigurationIssues(code, lines, results, language) {
+  const issues = [];
+
+  // Rule 46: Debug Mode in Production
+  const debugPatterns = [
+    /DEBUG\s*=\s*[Tt]rue/g,
+    /process\.env\.NODE_ENV\s*!==?\s*["']production["']/g,
+    /app\.set\(\s*["']env["']\s*,\s*["']development["']\s*\)/g,
+    /debug:\s*true/gi,
+    /\.setLevel\(\s*["']debug["']\s*\)/gi
+  ];
+
+  lines.forEach((line, index) => {
+    debugPatterns.forEach(pattern => {
+      if (pattern.test(line) && !line.includes('if') && !line.includes('//')) {
+        const issue = createIssue(
+          'debug-mode-production',
+          SEVERITY.HIGH,
+          'Debug Mode Enabled',
+          'Your application has debug mode enabled. In production, this exposes detailed error messages with stack traces, internal file paths, and database queries to users. Attackers use this information to understand your application structure and find vulnerabilities.',
+          'Set NODE_ENV=production in production environments. Use: if (process.env.NODE_ENV !== "production") { app.set("debug", true); } to only enable debug mode in development.',
+          index + 1,
+          'Configuration'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 47: Default Credentials
+  const defaultCredPatterns = [
+    /(?:username|user).*[=:]\s*["'](admin|root|administrator)["']/gi,
+    /(?:password|passwd).*[=:]\s*["'](admin|password|123456|root)["']/gi,
+    /(?:username|user).*[=:]\s*["']admin["'].*(?:password|passwd).*[=:]\s*["']admin["']/gi
+  ];
+
+  lines.forEach((line, index) => {
+    defaultCredPatterns.forEach(pattern => {
+      if (pattern.test(line)) {
+        const issue = createIssue(
+          'default-credentials',
+          SEVERITY.CRITICAL,
+          'Default Credentials Detected',
+          'Your code uses default credentials like admin/admin or root/password. These are the first things attackers try. Attackers have automated tools that scan the internet trying common default credentials on every server they find.',
+          'Change ALL default credentials before deployment. Use strong, unique passwords stored in environment variables. For databases and admin panels, require password changes on first login.',
+          index + 1,
+          'Configuration'
+        );
+        issues.push(issue);
+      }
+    });
+  });
+
+  // Rule 48: Exposed Admin Panels
+  if (language === 'javascript' || language === 'typescript') {
+    const adminRoutePatterns = [
+      /app\.(get|post|put|delete|all)\s*\(\s*["'`]\/admin/gi,
+      /router\.(get|post|put|delete|all)\s*\(\s*["'`]\/admin/gi,
+      /path\s*:\s*["'`]\/admin/gi,
+      /route\s*:\s*["'`]\/dashboard/gi
+    ];
+
+    lines.forEach((line, index) => {
+      adminRoutePatterns.forEach(pattern => {
+        if (pattern.test(line)) {
+          const context = lines.slice(Math.max(0, index - 2), Math.min(lines.length, index + 3)).join('\n');
+          if (!context.includes('auth') &&
+              !context.includes('protect') &&
+              !context.includes('verify') &&
+              !context.includes('isAdmin') &&
+              !context.includes('requireAdmin')) {
+            const issue = createIssue(
+              'exposed-admin-panel',
+              SEVERITY.HIGH,
+              'Admin Panel Without Authentication',
+              'Your admin routes (/admin, /dashboard) appear to be accessible without authentication. Anyone who discovers these URLs can access your admin panel and potentially control your entire application.',
+              'Protect admin routes with authentication AND authorization middleware: app.use("/admin", requireAuth, requireAdmin, adminRouter); Also consider IP whitelisting for admin panels.',
+              index + 1,
+              'Configuration'
+            );
+            issues.push(issue);
+          }
+        }
+      });
+    });
+  }
+
+  // Rule 49: Directory Listing Enabled
+  if (language === 'javascript' || language === 'typescript') {
+    const staticServePatterns = [
+      /express\.static\s*\(/gi,
+      /serve-static/gi,
+      /serveStatic/gi
+    ];
+
+    lines.forEach((line, index) => {
+      staticServePatterns.forEach(pattern => {
+        if (pattern.test(line)) {
+          const context = lines.slice(index, Math.min(lines.length, index + 3)).join('\n');
+          if (!context.includes('index:') && !context.includes('index.html')) {
+            const issue = createIssue(
+              'directory-listing',
+              SEVERITY.MEDIUM,
+              'Potential Directory Listing Enabled',
+              'Your static file serving may allow directory listing. When users visit a directory without an index.html, they\'ll see a list of all files. This exposes your file structure, configuration files, and potentially sensitive documents.',
+              'Ensure directories have index.html files, or configure express.static with index: false and handle directory requests explicitly. Example: app.use(express.static("public", { index: "index.html" }));',
+              index + 1,
+              'Configuration'
+            );
+            issues.push(issue);
+          }
+        }
+      });
+    });
+  }
+
+  // Rule 50: Insecure File Uploads
+  const fileUploadPatterns = [
+    /multer/gi,
+    /express-fileupload/gi,
+    /formidable/gi,
+    /req\.files?/gi,
+    /upload\./gi
+  ];
+
+  const hasFileUpload = fileUploadPatterns.some(pattern => pattern.test(code));
+
+  if (hasFileUpload) {
+    const hasValidation = /\.mimetype/gi.test(code) ||
+                         /fileFilter/gi.test(code) ||
+                         /\.size/gi.test(code) ||
+                         /limits:/gi.test(code);
+
+    const hasMalwareCheck = /antivirus|clamav|virus|malware|scan/gi.test(code);
+
+    if (!hasValidation || !hasMalwareCheck) {
+      const issue = createIssue(
+        'insecure-file-upload',
+        SEVERITY.CRITICAL,
+        'Insecure File Upload Configuration',
+        'Your file upload implementation lacks proper validation. Attackers can upload executable files (.php, .jsp, .exe) or extremely large files to crash your server. Uploaded files can execute code and take over your server.',
+        'Implement comprehensive file upload security: 1) Validate file types (whitelist allowed extensions), 2) Check file size limits, 3) Rename files (don\'t use original names), 4) Store outside web root, 5) Scan for malware. Example: multer({ fileFilter: (req, file, cb) => { if (allowedTypes.includes(file.mimetype)) cb(null, true); else cb(new Error("Invalid file type")); }, limits: { fileSize: 5 * 1024 * 1024 } })',
+        null,
+        'Configuration'
+      );
+      results.critical.push(issue);
+      results.allIssues.push(issue);
+    }
+  }
+
+  // Rule 51: Missing Input Validation
+  if (language === 'javascript' || language === 'typescript') {
+    const hasUserInput = /req\.(body|query|params)/gi.test(code);
+    const hasValidation = /joi|yup|express-validator|validate|schema|ajv/gi.test(code);
+
+    if (hasUserInput && !hasValidation) {
+      const issue = createIssue(
+        'missing-input-validation',
+        SEVERITY.HIGH,
+        'Missing Input Validation',
+        'Your code uses user input (req.body, req.query, req.params) without validation. Users can send unexpected data types, missing fields, or malicious values that crash your application or bypass security checks.',
+        'Use a validation library to validate ALL user input: joi, yup, or express-validator. Example: const schema = Joi.object({ email: Joi.string().email().required(), age: Joi.number().min(0).max(120) }); const { error, value } = schema.validate(req.body);',
+        null,
+        'Configuration'
+      );
+      results.high.push(issue);
+      results.allIssues.push(issue);
+    }
+  }
+
+  // Rule 52: Insecure Cookie Settings
+  const cookiePatterns = [
+    /res\.cookie\s*\(/gi,
+    /\.cookie\s*\(/gi,
+    /setCookie/gi,
+    /session\(/gi
+  ];
+
+  lines.forEach((line, index) => {
+    cookiePatterns.forEach(pattern => {
+      if (pattern.test(line)) {
+        const context = lines.slice(index, Math.min(lines.length, index + 5)).join('\n');
+
+        const hasHttpOnly = /httpOnly\s*:\s*true/gi.test(context);
+        const hasSecure = /secure\s*:\s*true/gi.test(context);
+        const hasSameSite = /sameSite/gi.test(context);
+
+        if (!hasHttpOnly || !hasSecure || !hasSameSite) {
+          const missing = [];
+          if (!hasHttpOnly) missing.push('httpOnly');
+          if (!hasSecure) missing.push('secure');
+          if (!hasSameSite) missing.push('sameSite');
+
+          const issue = createIssue(
+            'insecure-cookie-settings',
+            SEVERITY.HIGH,
+            'Insecure Cookie Configuration',
+            `Your cookies are missing security flags: ${missing.join(', ')}. Without httpOnly, JavaScript can steal cookies (XSS attacks). Without secure, cookies are sent over HTTP (can be intercepted). Without sameSite, your site is vulnerable to CSRF attacks.`,
+            `Always set all three flags: res.cookie("token", value, { httpOnly: true, secure: true, sameSite: "strict" }); httpOnly prevents XSS, secure requires HTTPS, sameSite prevents CSRF.`,
+            index + 1,
+            'Configuration'
+          );
+          issues.push(issue);
+        }
+      }
+    });
+  });
+
+  // Add all configuration issues
+  issues.forEach(issue => {
+    if (issue.severity === SEVERITY.CRITICAL) {
+      results.critical.push(issue);
+    } else if (issue.severity === SEVERITY.HIGH) {
+      results.high.push(issue);
+    } else if (issue.severity === SEVERITY.MEDIUM) {
+      results.medium.push(issue);
+    } else if (issue.severity === SEVERITY.LOW) {
+      results.low.push(issue);
+    }
+    results.allIssues.push(issue);
+  });
+
+  results.stats.rulesChecked += 7; // Rules 46-52
+}
+
 // Helper function to get beginner-friendly explanations
 export function getBeginnerExplanation(issueId) {
   const explanations = {
@@ -917,6 +1320,42 @@ export function getBeginnerExplanation(issueId) {
       impact: 'Malicious code runs in other users\' browsers, stealing their passwords, reading their emails, or posting as them.',
       analogy: 'Like letting someone write anything in your school newsletter. They could write "click here for free pizza" but actually steal everyone\'s lunch money.',
       fix: 'Use textContent instead of innerHTML, or clean the user input with a library like DOMPurify before displaying it.'
+    },
+    'env-in-git': {
+      what: 'Your .env file (which contains all your secrets) is being tracked by git. Once it\'s in git, it stays in the history forever - even if you delete it later.',
+      impact: 'Anyone who gets access to your GitHub repo can see all your API keys, passwords, and database credentials. Even if you make the repo private later, the secrets are already exposed in the git history.',
+      analogy: 'It\'s like posting your house key location on social media, then deleting the post - but everyone already took a screenshot.',
+      fix: 'Add .env to your .gitignore file right now. Then remove it from git history with: git rm --cached .env && git commit -m "Remove .env". Rotate ALL secrets in the file since they\'re compromised.'
+    },
+    'secrets-in-client-code': {
+      what: 'Your React/Vue/Angular app is trying to use secret API keys. But client-side code is sent to users\' browsers - anyone can open DevTools and read all your secrets.',
+      impact: 'Your API keys will be visible to anyone who uses your website. They can copy them and use your accounts, potentially charging you thousands of dollars.',
+      analogy: 'Like printing your credit card number on your store\'s flyer that you hand to customers. Everyone who gets the flyer has your credit card.',
+      fix: 'Keep secrets on your backend server. Create API endpoints that use the secrets internally. Your frontend calls YOUR API, and your API calls the external service with the secret. Only use environment variables prefixed with REACT_APP_ or NEXT_PUBLIC_ for non-secret public values.'
+    },
+    'debug-mode-production': {
+      what: 'Your app is running in debug mode, which shows detailed error messages to users including file paths, database queries, and internal code.',
+      impact: 'Hackers can trigger errors on purpose to learn about your system structure, file locations, database names, and libraries you use. This information helps them find other vulnerabilities.',
+      analogy: 'Like leaving your house blueprints, safe combination hints, and security system manual on your front porch for anyone to read.',
+      fix: 'Set NODE_ENV=production on your production server. Only enable debug mode in development: if (process.env.NODE_ENV !== "production") { app.set("debug", true); }'
+    },
+    'default-credentials': {
+      what: 'Your code uses common default passwords like "admin/admin" or "root/password". These are the first thing hackers try.',
+      impact: 'Attackers have automated bots that scan the entire internet trying "admin/admin" on every server. Your system will be hacked within hours of going online.',
+      analogy: 'Like using "1234" as your phone PIN - everyone knows to try that first.',
+      fix: 'Change ALL default credentials before deployment. Use strong, unique passwords: at least 16 characters, random mix of letters/numbers/symbols. Store them in environment variables, never in code.'
+    },
+    'insecure-file-upload': {
+      what: 'Your file upload accepts any file type without checking. Users can upload executable files (.exe, .php) or huge files to crash your server.',
+      impact: 'Attackers upload a malicious PHP or JSP file, then visit it in their browser to run code on your server. They can install backdoors, steal your database, or take complete control.',
+      analogy: 'Like accepting mystery packages at your door without checking what\'s inside - someone could mail you a bomb.',
+      fix: 'Whitelist allowed file types (only images: .jpg, .png). Check file size limits. Rename uploaded files so users can\'t control the name. Store files outside your web directory so they can\'t be executed.'
+    },
+    'insecure-cookie-settings': {
+      what: 'Your authentication cookies don\'t have security flags (httpOnly, secure, sameSite). This makes them easy to steal.',
+      impact: 'Without httpOnly: JavaScript malware can steal cookies. Without secure: cookies sent over HTTP can be intercepted. Without sameSite: your site is vulnerable to CSRF attacks where attackers trick users into making requests.',
+      analogy: 'Like writing your password on a postcard (not an envelope) and mailing it - everyone who handles the mail can read it.',
+      fix: 'Always set all three flags when creating cookies: res.cookie("token", value, { httpOnly: true, secure: true, sameSite: "strict" }); This prevents XSS, ensures HTTPS, and stops CSRF.'
     }
   };
 
