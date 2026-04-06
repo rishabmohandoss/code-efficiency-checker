@@ -1,0 +1,1050 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Code Efficiency Checker</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700;800&family=Syne:wght@400;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #050a0f;
+    --surface: #0c1520;
+    --green: #00ff88;
+    --amber: #ffb800;
+    --red: #ff4d6d;
+    --blue: #38bdf8;
+    --muted: #3a4a5c;
+    --text: #e2eaf4;
+    --dim: #7a8fa6;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    font-family: 'Syne', sans-serif;
+    color: var(--text);
+    width: 100vw; height: 100vh;
+    overflow: hidden;
+    cursor: none;
+  }
+
+  /* ── GRID BACKGROUND ── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0,255,136,.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,255,136,.03) 1px, transparent 1px);
+    background-size: 48px 48px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* ── SLIDES ── */
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    padding: 60px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .6s ease;
+    z-index: 1;
+  }
+  .slide.active {
+    opacity: 1;
+    pointer-events: all;
+  }
+
+  /* ── PROGRESS BAR ── */
+  #progress {
+    position: fixed; top: 0; left: 0; height: 3px;
+    background: var(--green);
+    box-shadow: 0 0 12px var(--green);
+    transition: width .3s linear;
+    z-index: 100;
+  }
+
+  /* ── SLIDE COUNTER ── */
+  #counter {
+    position: fixed; bottom: 28px; right: 40px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; color: var(--muted);
+    z-index: 100;
+  }
+
+  /* ── NAV DOTS ── */
+  #dots {
+    position: fixed; bottom: 28px; left: 50%; transform: translateX(-50%);
+    display: flex; gap: 8px; z-index: 100;
+  }
+  .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted); cursor: pointer;
+    transition: background .3s, transform .3s;
+  }
+  .dot.active { background: var(--green); transform: scale(1.5); }
+
+  /* ── CLICK ZONES ── */
+  #prev-zone {
+    position: fixed; left: 0; top: 0; width: 15%; height: 100%;
+    z-index: 50; cursor: w-resize;
+  }
+  #next-zone {
+    position: fixed; right: 0; top: 0; width: 15%; height: 100%;
+    z-index: 50; cursor: e-resize;
+  }
+
+  /* ── TYPOGRAPHY ── */
+  .eyebrow {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; letter-spacing: .18em; text-transform: uppercase;
+    color: var(--green); margin-bottom: 16px;
+  }
+  .eyebrow::before { content: '> '; opacity: .6; }
+
+  h1 {
+    font-size: clamp(52px, 7vw, 92px);
+    font-weight: 900; line-height: 1;
+    letter-spacing: -.03em;
+  }
+  h2 {
+    font-size: clamp(36px, 5vw, 64px);
+    font-weight: 800; line-height: 1.05;
+    letter-spacing: -.02em;
+  }
+  h3 { font-size: 22px; font-weight: 700; }
+  p.lead {
+    font-size: clamp(16px, 2vw, 22px);
+    line-height: 1.6; color: var(--dim);
+    max-width: 680px;
+  }
+
+  .accent-green { color: var(--green); }
+  .accent-amber { color: var(--amber); }
+  .accent-red   { color: var(--red); }
+  .accent-blue  { color: var(--blue); }
+
+  /* ── GLOW TAG ── */
+  .tag {
+    display: inline-block;
+    padding: 4px 14px; border-radius: 4px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; font-weight: 700;
+    border: 1px solid;
+  }
+  .tag-green { color: var(--green); border-color: rgba(0,255,136,.3); background: rgba(0,255,136,.06); }
+  .tag-amber { color: var(--amber); border-color: rgba(255,184,0,.3);  background: rgba(255,184,0,.06); }
+  .tag-red   { color: var(--red);   border-color: rgba(255,77,109,.3); background: rgba(255,77,109,.06); }
+  .tag-blue  { color: var(--blue);  border-color: rgba(56,189,248,.3); background: rgba(56,189,248,.06); }
+
+  /* ── CARD ── */
+  .card {
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 12px; padding: 28px 32px;
+  }
+
+  /* ── CODE BLOCK ── */
+  pre {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; line-height: 1.7;
+    background: #080e16;
+    border: 1px solid rgba(255,255,255,.07);
+    border-radius: 8px; padding: 20px 24px;
+    overflow: hidden;
+  }
+
+  /* ═══════════════════════════════════════
+     SLIDE 1 — TITLE
+  ═══════════════════════════════════════ */
+  #s1 .inner {
+    display: flex; flex-direction: column;
+    gap: 24px; max-width: 960px;
+  }
+
+  .title-badge {
+    display: inline-flex; align-items: center; gap: 10px;
+    padding: 8px 20px;
+    border: 1px solid rgba(0,255,136,.25);
+    border-radius: 999px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; color: var(--green);
+    background: rgba(0,255,136,.05);
+    width: fit-content;
+  }
+  .badge-dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green);
+    box-shadow: 0 0 8px var(--green);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%,100% { opacity: 1; transform: scale(1); }
+    50%      { opacity: .5; transform: scale(.8); }
+  }
+
+  .title-stack { display: flex; flex-direction: column; gap: 8px; }
+  .title-line { overflow: hidden; }
+  .title-line span {
+    display: block;
+    transform: translateY(100%);
+    transition: transform .7s cubic-bezier(.16,1,.3,1);
+  }
+  .active .title-line span { transform: translateY(0); }
+  .title-line:nth-child(2) span { transition-delay: .1s; }
+  .title-line:nth-child(3) span { transition-delay: .2s; }
+
+  .title-sub {
+    opacity: 0; transform: translateY(12px);
+    transition: opacity .6s ease .5s, transform .6s ease .5s;
+    max-width: 700px;
+  }
+  .active .title-sub { opacity: 1; transform: translateY(0); }
+
+  .title-tags {
+    display: flex; flex-wrap: wrap; gap: 10px;
+    opacity: 0; transform: translateY(12px);
+    transition: opacity .6s ease .7s, transform .6s ease .7s;
+  }
+  .active .title-tags { opacity: 1; transform: translateY(0); }
+
+  /* ═══════════════════════════════════════
+     SLIDE 2 — THE PROBLEM
+  ═══════════════════════════════════════ */
+  #s2 { align-items: stretch; }
+  #s2 .layout {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 48px; align-items: center; width: 100%;
+  }
+  #s2 .left { display: flex; flex-direction: column; gap: 24px; }
+
+  .problem-stat {
+    display: flex; flex-direction: column; gap: 4px;
+    padding: 20px 24px; border-left: 3px solid var(--red);
+    background: rgba(255,77,109,.05);
+    border-radius: 0 8px 8px 0;
+  }
+  .stat-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 40px; font-weight: 800; color: var(--red);
+  }
+  .stat-label { font-size: 14px; color: var(--dim); }
+
+  /* Bar chart animation */
+  .bar-chart { display: flex; flex-direction: column; gap: 16px; padding: 24px; }
+  .bar-row { display: flex; flex-direction: column; gap: 6px; }
+  .bar-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; color: var(--dim);
+    display: flex; justify-content: space-between;
+  }
+  .bar-track {
+    height: 14px; background: rgba(255,255,255,.05);
+    border-radius: 4px; overflow: hidden;
+  }
+  .bar-fill {
+    height: 100%; border-radius: 4px;
+    width: 0; transition: width 1.2s cubic-bezier(.16,1,.3,1);
+  }
+  #s2.active .bar-fill { width: var(--w); }
+
+  .bar-fill.o1    { background: var(--green); box-shadow: 0 0 10px rgba(0,255,136,.4); transition-delay: .3s; }
+  .bar-fill.ologn { background: var(--blue);  box-shadow: 0 0 10px rgba(56,189,248,.4); transition-delay: .45s; }
+  .bar-fill.on    { background: var(--amber); box-shadow: 0 0 10px rgba(255,184,0,.4); transition-delay: .6s; }
+  .bar-fill.on2   { background: var(--red);   box-shadow: 0 0 10px rgba(255,77,109,.4); transition-delay: .75s; }
+  .bar-fill.on3   { background: #c026d3;       box-shadow: 0 0 10px rgba(192,38,211,.4); transition-delay: .9s; }
+
+  /* ═══════════════════════════════════════
+     SLIDE 3 — WHAT WE BUILT
+  ═══════════════════════════════════════ */
+  #s3 .layout {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 48px; align-items: center; width: 100%;
+  }
+  #s3 .left { display: flex; flex-direction: column; gap: 28px; }
+
+  .feature-list { display: flex; flex-direction: column; gap: 14px; }
+  .feat {
+    display: flex; align-items: flex-start; gap: 14px;
+    padding: 14px 18px;
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 8px; background: var(--surface);
+    opacity: 0; transform: translateX(-20px);
+    transition: opacity .5s ease, transform .5s ease;
+  }
+  #s3.active .feat:nth-child(1) { opacity:1; transform:translateX(0); transition-delay:.2s; }
+  #s3.active .feat:nth-child(2) { opacity:1; transform:translateX(0); transition-delay:.35s; }
+  #s3.active .feat:nth-child(3) { opacity:1; transform:translateX(0); transition-delay:.5s; }
+  #s3.active .feat:nth-child(4) { opacity:1; transform:translateX(0); transition-delay:.65s; }
+
+  .feat-icon { font-size: 22px; min-width: 28px; }
+  .feat-text h3 { font-size: 16px; margin-bottom: 2px; }
+  .feat-text p  { font-size: 13px; color: var(--dim); line-height: 1.5; }
+
+  .lang-grid {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px;
+  }
+  .lang-pill {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; padding: 4px 10px;
+    border-radius: 4px; background: rgba(255,255,255,.05);
+    border: 1px solid rgba(255,255,255,.08);
+    color: var(--dim);
+  }
+
+  /* Animated scan preview */
+  .scan-demo {
+    background: #080e16;
+    border: 1px solid rgba(0,255,136,.15);
+    border-radius: 12px; overflow: hidden;
+    height: 360px; position: relative;
+  }
+  .scan-header {
+    background: #0d1824;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+    padding: 10px 16px; display: flex; gap: 8px;
+  }
+  .dot-r { width:10px;height:10px;border-radius:50%;background:#ff5f57; }
+  .dot-y { width:10px;height:10px;border-radius:50%;background:#febc2e; }
+  .dot-g { width:10px;height:10px;border-radius:50%;background:#28c840; }
+  .scan-body { padding: 16px 20px; overflow: hidden; height: calc(100% - 37px); }
+  .code-line {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 12px; line-height: 2;
+    white-space: nowrap; overflow: hidden;
+    color: var(--dim);
+    display: flex; gap: 12px;
+  }
+  .ln { color: #2d3f52; min-width: 24px; }
+  .kw  { color: #c792ea; }
+  .fn  { color: #82aaff; }
+  .str { color: #c3e88d; }
+  .op  { color: #89ddff; }
+
+  .scan-line {
+    position: absolute; left: 0; right: 0; height: 2px;
+    background: linear-gradient(90deg, transparent, var(--green), transparent);
+    box-shadow: 0 0 20px var(--green);
+    top: 37px;
+    animation: scan 3s linear infinite;
+  }
+  @keyframes scan {
+    0%   { transform: translateY(0); opacity: 0; }
+    5%   { opacity: 1; }
+    95%  { opacity: 1; }
+    100% { transform: translateY(323px); opacity: 0; }
+  }
+
+  .flag-popup {
+    position: absolute; bottom: 16px; right: 16px;
+    background: rgba(255,77,109,.1);
+    border: 1px solid rgba(255,77,109,.4);
+    border-radius: 8px; padding: 10px 14px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--red);
+    animation: popIn 0s 1.5s both;
+    display: flex; align-items: center; gap: 8px;
+  }
+  @keyframes popIn {
+    from { opacity:0; transform: scale(.9) translateY(8px); }
+    to   { opacity:1; transform: scale(1) translateY(0); }
+  }
+
+  /* ═══════════════════════════════════════
+     SLIDE 4 — COMPLEXITY VISUAL
+  ═══════════════════════════════════════ */
+  #s4 .layout {
+    display: grid; grid-template-columns: 1.2fr 1fr;
+    gap: 56px; align-items: center; width: 100%;
+  }
+
+  .graph-container {
+    position: relative; height: 340px;
+    border-bottom: 1px solid var(--muted);
+    border-left:   1px solid var(--muted);
+    margin-left: 40px;
+  }
+  .graph-container svg {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; overflow: visible;
+  }
+  .axis-label {
+    position: absolute;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; color: var(--muted);
+  }
+  .axis-x { bottom: -24px; right: 0; }
+  .axis-y { top: 0; left: -36px; }
+
+  .complexity-path {
+    fill: none; stroke-width: 2.5;
+    stroke-dasharray: 1000; stroke-dashoffset: 1000;
+    transition: stroke-dashoffset 1.5s cubic-bezier(.16,1,.3,1);
+  }
+  #s4.active .complexity-path { stroke-dashoffset: 0; }
+  .p-o1    { stroke: var(--green);    transition-delay: .1s; }
+  .p-logn  { stroke: var(--blue);     transition-delay: .3s; }
+  .p-n     { stroke: var(--amber);    transition-delay: .5s; }
+  .p-n2    { stroke: var(--red);      transition-delay: .7s; }
+
+  .legend { display: flex; flex-direction: column; gap: 14px; }
+  .legend-item { display: flex; flex-direction: column; gap: 4px; }
+  .legend-row {
+    display: flex; align-items: center; gap: 10px;
+  }
+  .legend-line { width: 28px; height: 3px; border-radius: 2px; }
+  .legend-name { font-family: 'JetBrains Mono', monospace; font-size: 14px; font-weight: 700; }
+  .legend-desc { font-size: 13px; color: var(--dim); line-height: 1.5; margin-left: 38px; }
+
+  /* ═══════════════════════════════════════
+     SLIDE 5 — HOW IT WORKS
+  ═══════════════════════════════════════ */
+  #s5 { flex-direction: column; gap: 48px; }
+  #s5 .top { text-align: center; }
+
+  .pipeline {
+    display: flex; align-items: center; gap: 0;
+    width: 100%; max-width: 1100px;
+  }
+  .pipe-step {
+    flex: 1; display: flex; flex-direction: column;
+    align-items: center; gap: 12px; text-align: center;
+    opacity: 0; transform: translateY(20px);
+    transition: opacity .5s ease, transform .5s ease;
+  }
+  #s5.active .pipe-step:nth-child(1) { opacity:1;transform:translateY(0);transition-delay:.2s; }
+  #s5.active .pipe-step:nth-child(3) { opacity:1;transform:translateY(0);transition-delay:.45s; }
+  #s5.active .pipe-step:nth-child(5) { opacity:1;transform:translateY(0);transition-delay:.7s; }
+  #s5.active .pipe-step:nth-child(7) { opacity:1;transform:translateY(0);transition-delay:.95s; }
+
+  .pipe-icon {
+    width: 72px; height: 72px; border-radius: 16px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px;
+  }
+  .pipe-arrow {
+    flex: 0 0 40px; color: var(--muted); font-size: 20px;
+    text-align: center; padding-top: 28px;
+    opacity: 0; transition: opacity .4s ease;
+  }
+  #s5.active .pipe-arrow { opacity:1; }
+  #s5.active .pipe-arrow:nth-child(2) { transition-delay:.3s; }
+  #s5.active .pipe-arrow:nth-child(4) { transition-delay:.55s; }
+  #s5.active .pipe-arrow:nth-child(6) { transition-delay:.8s; }
+
+  .pipe-step h3 { font-size: 15px; font-weight: 700; }
+  .pipe-step p  { font-size: 12px; color: var(--dim); max-width: 130px; line-height: 1.5; }
+
+  .rules-grid {
+    display: grid; grid-template-columns: repeat(4,1fr);
+    gap: 10px; width: 100%; max-width: 1100px;
+  }
+  .rule-chip {
+    padding: 8px 12px; border-radius: 6px;
+    font-family: 'JetBrains Mono', monospace; font-size: 11px;
+    border: 1px solid; text-align: center;
+    opacity: 0; transform: scale(.9);
+    transition: opacity .3s ease, transform .3s ease;
+  }
+  #s5.active .rule-chip { opacity:1; transform:scale(1); }
+  #s5.active .rule-chip:nth-child(1)  { transition-delay:.1s; }
+  #s5.active .rule-chip:nth-child(2)  { transition-delay:.15s; }
+  #s5.active .rule-chip:nth-child(3)  { transition-delay:.2s; }
+  #s5.active .rule-chip:nth-child(4)  { transition-delay:.25s; }
+  #s5.active .rule-chip:nth-child(5)  { transition-delay:.3s; }
+  #s5.active .rule-chip:nth-child(6)  { transition-delay:.35s; }
+  #s5.active .rule-chip:nth-child(7)  { transition-delay:.4s; }
+  #s5.active .rule-chip:nth-child(8)  { transition-delay:.45s; }
+
+  /* ═══════════════════════════════════════
+     SLIDE 6 — AI SLOP DETECTION
+  ═══════════════════════════════════════ */
+  #s6 .layout {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 48px; align-items: start; width: 100%;
+  }
+  #s6 .left { display: flex; flex-direction: column; gap: 24px; }
+
+  .slop-item {
+    display: flex; gap: 14px; align-items: flex-start;
+    padding: 16px 18px;
+    background: var(--surface);
+    border: 1px solid rgba(255,255,255,.06);
+    border-radius: 10px;
+    opacity: 0; transform: translateX(-16px);
+    transition: opacity .4s ease, transform .4s ease;
+  }
+  #s6.active .slop-item:nth-child(1) { opacity:1;transform:none;transition-delay:.15s; }
+  #s6.active .slop-item:nth-child(2) { opacity:1;transform:none;transition-delay:.3s; }
+  #s6.active .slop-item:nth-child(3) { opacity:1;transform:none;transition-delay:.45s; }
+  #s6.active .slop-item:nth-child(4) { opacity:1;transform:none;transition-delay:.6s; }
+
+  .slop-icon { font-size: 20px; }
+  .slop-text h3 { font-size: 14px; margin-bottom: 3px; color: var(--amber); }
+  .slop-text p  { font-size: 12px; color: var(--dim); line-height: 1.5; }
+
+  .code-compare {
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .compare-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 11px; text-transform: uppercase; letter-spacing: .1em;
+    margin-bottom: 4px;
+  }
+
+  /* ═══════════════════════════════════════
+     SLIDE 7 — ARCHITECTURE
+  ═══════════════════════════════════════ */
+  #s7 .layout {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 56px; align-items: center; width: 100%;
+  }
+
+  .arch-tree {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; line-height: 2;
+    background: #080e16;
+    border: 1px solid rgba(0,255,136,.12);
+    border-radius: 10px; padding: 24px 28px;
+  }
+  .arch-folder { color: var(--blue); }
+  .arch-file   { color: var(--dim); }
+  .arch-file.hot { color: var(--green); }
+  .arch-note   { color: var(--muted); font-size: 11px; }
+
+  .tech-stack { display: flex; flex-direction: column; gap: 16px; }
+  .tech-row { display: flex; align-items: center; gap: 14px; }
+  .tech-name {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 14px; font-weight: 700; min-width: 120px;
+  }
+  .tech-bar-track {
+    flex: 1; height: 6px; background: rgba(255,255,255,.05);
+    border-radius: 3px; overflow: hidden;
+  }
+  .tech-bar {
+    height: 100%; border-radius: 3px;
+    width: 0; transition: width 1s cubic-bezier(.16,1,.3,1);
+  }
+  #s7.active .tech-bar { width: var(--w); }
+  .tech-bar:nth-child(1) { transition-delay:.2s; }
+
+  .tech-desc { font-size: 12px; color: var(--muted); min-width: 200px; }
+
+  /* ═══════════════════════════════════════
+     SLIDE 8 — CTA / CLOSING
+  ═══════════════════════════════════════ */
+  #s8 { justify-content: center; align-items: center; text-align: center; }
+  #s8 .inner { display: flex; flex-direction: column; align-items: center; gap: 32px; }
+
+  .big-url {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: clamp(14px, 2.5vw, 22px);
+    color: var(--green);
+    background: rgba(0,255,136,.06);
+    border: 1px solid rgba(0,255,136,.2);
+    border-radius: 10px; padding: 14px 32px;
+    word-break: break-all;
+  }
+
+  .stat-row {
+    display: flex; gap: 40px; justify-content: center;
+    flex-wrap: wrap;
+  }
+  .stat-box {
+    display: flex; flex-direction: column; align-items: center;
+    gap: 4px;
+  }
+  .stat-box .num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 48px; font-weight: 800; line-height: 1;
+  }
+  .stat-box .lbl { font-size: 13px; color: var(--dim); }
+
+  .closing-line {
+    font-size: 18px; color: var(--dim); max-width: 600px; line-height: 1.7;
+  }
+  .closing-line em { color: var(--text); font-style: normal; }
+
+  /* ── ENTRANCE ANIMATIONS ── */
+  @keyframes fadeUp {
+    from { opacity:0; transform: translateY(24px); }
+    to   { opacity:1; transform: translateY(0); }
+  }
+  .fade-up { animation: fadeUp .6s ease forwards; }
+</style>
+</head>
+<body>
+
+<div id="progress"></div>
+
+<!-- SLIDE 1: TITLE -->
+<div class="slide" id="s1">
+  <div class="inner">
+    <div class="title-badge">
+      <div class="badge-dot"></div>
+      NJIT CS PROJECT — LIVE DEMO
+    </div>
+    <div class="title-stack">
+      <div class="title-line"><span class="accent-green">Code</span></div>
+      <div class="title-line"><span>Efficiency</span></div>
+      <div class="title-line"><span>Checker<span style="color:var(--green)">.</span></span></div>
+    </div>
+    <p class="lead title-sub">
+      A browser-based static analysis tool that reads your code,
+      identifies performance anti-patterns, and tells you exactly
+      why it'll slow down at scale — before it does.
+    </p>
+    <div class="title-tags">
+      <span class="tag tag-green">25 Detection Rules</span>
+      <span class="tag tag-blue">10 Languages</span>
+      <span class="tag tag-amber">Zero Backend</span>
+      <span class="tag tag-red">AI Slop Detection</span>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 2: THE PROBLEM -->
+<div class="slide" id="s2">
+  <div class="layout">
+    <div class="left">
+      <div class="eyebrow">The Problem</div>
+      <h2>Your code works.<br>But will it <span class="accent-red">scale</span>?</h2>
+      <p class="lead">
+        Most bugs aren't crashes — they're code that works perfectly
+        on small data, then grinds to a halt when it needs to handle
+        10,000 items instead of 10.
+      </p>
+      <div class="problem-stat">
+        <div class="stat-num">O(n²)</div>
+        <div class="stat-label">One nested loop turns 1,000 items into 1,000,000 operations</div>
+      </div>
+      <p class="lead" style="font-size:15px;">
+        This is the difference between software that ships and software that dies.
+        Our tool catches it <em style="color:var(--green)">before</em> it reaches production.
+      </p>
+    </div>
+    <div class="card bar-chart">
+      <div class="eyebrow" style="margin-bottom:8px;">Operations for n = 1,000 items</div>
+      <div class="bar-row">
+        <div class="bar-label"><span>O(1) — Constant</span><span style="color:var(--green)">1 op</span></div>
+        <div class="bar-track"><div class="bar-fill o1" style="--w:2%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span>O(log n) — Logarithmic</span><span style="color:var(--blue)">10 ops</span></div>
+        <div class="bar-track"><div class="bar-fill ologn" style="--w:5%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span>O(n) — Linear</span><span style="color:var(--amber)">1,000 ops</span></div>
+        <div class="bar-track"><div class="bar-fill on" style="--w:25%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span>O(n²) — Quadratic</span><span style="color:var(--red)">1,000,000 ops</span></div>
+        <div class="bar-track"><div class="bar-fill on2" style="--w:80%"></div></div>
+      </div>
+      <div class="bar-row">
+        <div class="bar-label"><span>O(n³) — Cubic</span><span style="color:#c026d3">1 Billion ops</span></div>
+        <div class="bar-track"><div class="bar-fill on3" style="--w:100%"></div></div>
+      </div>
+      <p style="font-size:11px;color:var(--muted);margin-top:12px;font-family:'JetBrains Mono',monospace;">
+        The bars don't lie. One nested loop = catastrophe.
+      </p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: WHAT WE BUILT -->
+<div class="slide" id="s3">
+  <div class="layout">
+    <div class="left">
+      <div class="eyebrow">What We Built</div>
+      <h2>Paste code.<br>Get <span class="accent-green">instant</span> feedback.</h2>
+      <div class="feature-list">
+        <div class="feat">
+          <div class="feat-icon" style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--green);font-weight:700;">O(n)</div>
+          <div class="feat-text">
+            <h3>Real-Time Analysis</h3>
+            <p>Single-pass O(n) scanner processes your entire file in milliseconds. No waiting.</p>
+          </div>
+        </div>
+        <div class="feat">
+          <div class="feat-icon" style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue);font-weight:700;">10x</div>
+          <div class="feat-text">
+            <h3>10 Languages Supported</h3>
+            <div class="lang-grid">
+              <span class="lang-pill">Python</span><span class="lang-pill">JavaScript</span>
+              <span class="lang-pill">TypeScript</span><span class="lang-pill">Java</span>
+              <span class="lang-pill">C++</span><span class="lang-pill">Go</span>
+              <span class="lang-pill">Rust</span><span class="lang-pill">Swift</span>
+              <span class="lang-pill">Ruby</span><span class="lang-pill">C</span>
+            </div>
+          </div>
+        </div>
+        <div class="feat">
+          <div class="feat-icon" style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--amber);font-weight:700;">[ ]</div>
+          <div class="feat-text">
+            <h3>100% Client-Side</h3>
+            <p>Your code never leaves the browser. No server, no storage, no privacy risk.</p>
+          </div>
+        </div>
+        <div class="feat">
+          <div class="feat-icon" style="font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--red);font-weight:700;">AI</div>
+          <div class="feat-text">
+            <h3>AI Slop Detection</h3>
+            <p>Identifies patterns common in LLM-generated code that "looks right" but breaks in production.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="scan-demo">
+      <div class="scan-header">
+        <div class="dot-r"></div><div class="dot-y"></div><div class="dot-g"></div>
+        <span style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted);margin-left:8px;">example.py</span>
+      </div>
+      <div class="scan-body">
+        <div class="code-line"><span class="ln">1</span><span><span class="kw">def</span> <span class="fn">find_duplicates</span>(arr):</span></div>
+        <div class="code-line"><span class="ln">2</span><span>&nbsp;&nbsp;result = []</span></div>
+        <div class="code-line"><span class="ln">3</span><span>&nbsp;&nbsp;<span class="kw">for</span> i <span class="op">in</span> arr:</span></div>
+        <div class="code-line" style="background:rgba(255,77,109,.08)"><span class="ln">4</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">for</span> j <span class="op">in</span> arr: <span style="color:var(--muted)"># ← FLAGGED</span></span></div>
+        <div class="code-line"><span class="ln">5</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">if</span> i == j:</span></div>
+        <div class="code-line"><span class="ln">6</span><span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;result.<span class="fn">append</span>(i)</span></div>
+        <div class="code-line"><span class="ln">7</span><span>&nbsp;&nbsp;<span class="kw">return</span> result</span></div>
+        <div class="code-line"><span class="ln">8</span></div>
+        <div class="code-line"><span class="ln">9</span><span><span class="kw">def</span> <span class="fn">process</span>(data):</span></div>
+        <div class="code-line"><span class="ln">10</span><span>&nbsp;&nbsp;<span class="kw">try</span>:</span></div>
+        <div class="code-line"><span class="ln">11</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="fn">do_thing</span>(data)</span></div>
+        <div class="code-line" style="background:rgba(255,184,0,.06)"><span class="ln">12</span><span>&nbsp;&nbsp;<span class="kw">except</span>: <span style="color:var(--muted)"># ← empty catch</span></span></div>
+        <div class="code-line" style="background:rgba(255,184,0,.06)"><span class="ln">13</span><span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="kw">pass</span></span></div>
+      </div>
+      <div class="scan-line"></div>
+      <div class="flag-popup">!! 2 issues found &nbsp;·&nbsp; O(n²) nested loop, empty catch</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: COMPLEXITY VISUAL -->
+<div class="slide" id="s4">
+  <div class="layout">
+    <div>
+      <div class="eyebrow">Time Complexity</div>
+      <h2>How cost <span class="accent-red">explodes</span><br>as input grows</h2>
+      <p class="lead" style="margin: 16px 0 32px;">
+        Each line represents how many operations your code performs
+        as you give it more data. The steeper the curve, the worse the problem.
+      </p>
+      <div class="graph-container">
+        <span class="axis-label axis-y">ops ↑</span>
+        <span class="axis-label axis-x">input size →</span>
+        <svg viewBox="0 0 400 300" preserveAspectRatio="none">
+          <!-- O(1) -->
+          <path class="complexity-path p-o1"
+            d="M0,290 L400,290"/>
+          <!-- O(log n) -->
+          <path class="complexity-path p-logn"
+            d="M0,290 C20,220 60,170 120,145 S250,120 400,110"/>
+          <!-- O(n) -->
+          <path class="complexity-path p-n"
+            d="M0,290 L400,10"/>
+          <!-- O(n²) -->
+          <path class="complexity-path p-n2"
+            d="M0,290 Q200,280 400,0"/>
+        </svg>
+      </div>
+    </div>
+    <div class="legend">
+      <div class="legend-item">
+        <div class="legend-row">
+          <div class="legend-line" style="background:var(--green)"></div>
+          <span class="legend-name accent-green">O(1)</span>
+          <span class="tag tag-green" style="font-size:11px;padding:2px 8px;">Best</span>
+        </div>
+        <p class="legend-desc">Constant time. Doesn't matter how big the input is — same speed always. Think: HashMap lookup.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-row">
+          <div class="legend-line" style="background:var(--blue)"></div>
+          <span class="legend-name accent-blue">O(log n)</span>
+          <span class="tag tag-blue" style="font-size:11px;padding:2px 8px;">Great</span>
+        </div>
+        <p class="legend-desc">Logarithmic. Doubles input, adds one step. Binary search — cuts the problem in half each time.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-row">
+          <div class="legend-line" style="background:var(--amber)"></div>
+          <span class="legend-name accent-amber">O(n)</span>
+          <span class="tag tag-amber" style="font-size:11px;padding:2px 8px;">Acceptable</span>
+        </div>
+        <p class="legend-desc">Linear. Visit each item once. Usually fine — a simple loop reading through a list.</p>
+      </div>
+      <div class="legend-item">
+        <div class="legend-row">
+          <div class="legend-line" style="background:var(--red)"></div>
+          <span class="legend-name accent-red">O(n²)</span>
+          <span class="tag tag-red" style="font-size:11px;padding:2px 8px;">Danger</span>
+        </div>
+        <p class="legend-desc">Quadratic. A loop inside a loop. 1,000 items = 1 million operations. This is what we detect.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 5: HOW IT WORKS -->
+<div class="slide" id="s5">
+  <div class="top">
+    <div class="eyebrow">Under the Hood</div>
+    <h2>How the <span class="accent-green">scanner</span> works</h2>
+  </div>
+  <div class="pipeline">
+    <div class="pipe-step">
+      <div class="pipe-icon" style="background:rgba(56,189,248,.1);border:1px solid rgba(56,189,248,.2);font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--blue);font-weight:700;">.src</div>
+      <h3>Input</h3>
+      <p>Paste, upload, or GitHub URL</p>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon" style="background:rgba(0,255,136,.1);border:1px solid rgba(0,255,136,.2);font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--green);font-weight:700;">//</div>
+      <h3>Strip</h3>
+      <p>Remove comments, normalize indentation</p>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon" style="background:rgba(255,184,0,.1);border:1px solid rgba(255,184,0,.2);font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--amber);font-weight:700;">rx</div>
+      <h3>Single-Pass Scan</h3>
+      <p>O(n) regex engine — one read through the file</p>
+    </div>
+    <div class="pipe-arrow">→</div>
+    <div class="pipe-step">
+      <div class="pipe-icon" style="background:rgba(255,77,109,.1);border:1px solid rgba(255,77,109,.2);font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--red);font-weight:700;">!!</div>
+      <h3>Flag & Report</h3>
+      <p>Severity, line number, fix hint</p>
+    </div>
+  </div>
+  <div class="rules-grid">
+    <div class="rule-chip tag-red">Nested Loops → O(n²)</div>
+    <div class="rule-chip tag-red">Triple Loops → O(n³)</div>
+    <div class="rule-chip tag-amber">Recursion w/o Memo</div>
+    <div class="rule-chip tag-amber">Sort Inside Loop</div>
+    <div class="rule-chip tag-amber">Await in For Loop</div>
+    <div class="rule-chip" style="color:var(--blue);border-color:rgba(56,189,248,.3);background:rgba(56,189,248,.05);">DOM Manip in Loop</div>
+    <div class="rule-chip" style="color:var(--green);border-color:rgba(0,255,136,.3);background:rgba(0,255,136,.05);">Array-as-Set</div>
+    <div class="rule-chip" style="color:var(--green);border-color:rgba(0,255,136,.3);background:rgba(0,255,136,.05);">String Concat in Loop</div>
+  </div>
+</div>
+
+<!-- SLIDE 6: AI SLOP DETECTION -->
+<div class="slide" id="s6">
+  <div class="layout">
+    <div class="left">
+      <div class="eyebrow">Unique Feature</div>
+      <h2>Detecting <span class="accent-amber">AI Slop</span><br>in your codebase</h2>
+      <p class="lead">
+        LLMs generate code that <em style="color:var(--text)">looks correct</em> but
+        hides subtle anti-patterns — code that passes code review but
+        silently breaks under real-world conditions.
+      </p>
+      <div class="slop-item">
+      <div class="slop-icon" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--amber);font-weight:700;min-width:28px;">{ }</div>
+        <div class="slop-text">
+          <h3>Error Swallowing</h3>
+          <p>Empty <code style="color:var(--amber)">catch {}</code> blocks that silently swallow failures. The program "works" — until it doesn't, with no trace why.</p>
+        </div>
+      </div>
+      <div class="slop-item">
+      <div class="slop-icon" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--amber);font-weight:700;min-width:28px;">?.</div>
+        <div class="slop-text">
+          <h3>Happy Path Bias</h3>
+          <p>Missing null checks. AI writes for the case where everything works, not the edge cases that actually happen in production.</p>
+        </div>
+      </div>
+      <div class="slop-item">
+      <div class="slop-icon" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--amber);font-weight:700;min-width:28px;">inf</div>
+        <div class="slop-text">
+          <h3>Infinite Loop Traps</h3>
+          <p><code style="color:var(--red)">while(true)</code> without a guaranteed exit. AI-generated retry logic is a common source of this.</p>
+        </div>
+      </div>
+      <div class="slop-item">
+      <div class="slop-icon" style="font-family:'JetBrains Mono',monospace;font-size:12px;color:var(--amber);font-weight:700;min-width:28px;">#</div>
+        <div class="slop-text">
+          <h3>Magic Numbers</h3>
+          <p>Hardcoded <code style="color:var(--amber)">86400</code>, <code style="color:var(--amber)">3.14159</code>, <code style="color:var(--amber)">255</code> scattered everywhere. Unmaintainable and error-prone.</p>
+        </div>
+      </div>
+    </div>
+    <div class="code-compare">
+      <div>
+        <p class="compare-label accent-red">-- AI-Generated (flagged)</p>
+        <pre>
+<span style="color:#82aaff">async function</span> <span style="color:#c3e88d">fetchUser</span>(id) {
+  <span style="color:#c792ea">try</span> {
+    <span style="color:#c792ea">const</span> res = <span style="color:#c792ea">await</span> api.get(id)
+    <span style="color:#c792ea">return</span> res.data.user.profile
+  } <span style="color:#c792ea">catch</span> (e) {
+    <span style="color:#c792ea">pass</span>  <span style="color:var(--muted)">// ← swallows all errors</span>
+  }
+  <span style="color:#c792ea">while</span>(<span style="color:#f78c6c">true</span>) {   <span style="color:var(--muted)">// ← no exit</span>
+    retry()
+  }
+}</pre>
+      </div>
+      <div>
+        <p class="compare-label accent-green">++ What it should look like</p>
+        <pre>
+<span style="color:#82aaff">async function</span> <span style="color:#c3e88d">fetchUser</span>(id) {
+  <span style="color:#c792ea">if</span> (!id) <span style="color:#c792ea">throw</span> Error(<span style="color:#c3e88d">"id required"</span>)
+
+  <span style="color:#c792ea">const</span> res = <span style="color:#c792ea">await</span> api.get(id)
+  <span style="color:#c792ea">if</span> (!res?.data?.user) {
+    <span style="color:#c792ea">throw</span> Error(<span style="color:#c3e88d">"user not found"</span>)
+  }
+  <span style="color:#c792ea">return</span> res.data.user.profile
+}</pre>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: ARCHITECTURE -->
+<div class="slide" id="s7">
+  <div class="layout">
+    <div>
+      <div class="eyebrow">Technical Architecture</div>
+      <h2>Built for <span class="accent-blue">performance</span><br>by design</h2>
+      <p class="lead" style="margin: 16px 0 28px;">
+        The engine itself follows the same rules it enforces — a single-pass
+        O(n) scanner that processes your code exactly once.
+      </p>
+      <div class="arch-tree">
+        <div><span style="color:var(--dim)">src/</span></div>
+        <div>&nbsp;&nbsp;<span class="arch-folder">├── App.jsx</span></div>
+        <div>&nbsp;&nbsp;<span style="color:var(--muted)">&nbsp;&nbsp;&nbsp;├── Rule Engine</span><span class="arch-note"> ← 25 pattern rules</span></div>
+        <div>&nbsp;&nbsp;<span style="color:var(--muted)">&nbsp;&nbsp;&nbsp;├── Helpers</span><span class="arch-note"> ← comment strip, depth</span></div>
+        <div>&nbsp;&nbsp;<span style="color:var(--green)">&nbsp;&nbsp;&nbsp;├── runAnalysis()</span><span class="arch-note"> ← O(n) single-pass [fast]</span></div>
+        <div>&nbsp;&nbsp;<span style="color:var(--muted)">&nbsp;&nbsp;&nbsp;├── GitHub Fetcher</span><span class="arch-note"> ← timeout + validate</span></div>
+        <div>&nbsp;&nbsp;<span style="color:var(--muted)">&nbsp;&nbsp;&nbsp;└── UI Components</span></div>
+        <div>&nbsp;&nbsp;<span class="arch-folder">├── main.jsx</span></div>
+        <div><span style="color:var(--dim)">tests/</span></div>
+        <div>&nbsp;&nbsp;<span class="arch-folder">└── analyzer.test.js</span><span class="arch-note"> ← 20+ cases</span></div>
+      </div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:28px;">
+      <div>
+        <h3 style="margin-bottom:16px;">Tech Stack</h3>
+        <div class="tech-stack">
+          <div class="tech-row">
+            <span class="tech-name accent-blue">React</span>
+            <div class="tech-bar-track"><div class="tech-bar" style="background:var(--blue);--w:90%;transition-delay:.2s;"></div></div>
+            <span class="tech-desc">UI components & state</span>
+          </div>
+          <div class="tech-row">
+            <span class="tech-name accent-amber">Vite</span>
+            <div class="tech-bar-track"><div class="tech-bar" style="background:var(--amber);--w:75%;transition-delay:.4s;"></div></div>
+            <span class="tech-desc">Build tool, HMR dev</span>
+          </div>
+          <div class="tech-row">
+            <span class="tech-name accent-green">Vitest</span>
+            <div class="tech-bar-track"><div class="tech-bar" style="background:var(--green);--w:60%;transition-delay:.6s;"></div></div>
+            <span class="tech-desc">20+ test cases</span>
+          </div>
+          <div class="tech-row">
+            <span class="tech-name" style="color:#f97316">Regex Engine</span>
+            <div class="tech-bar-track"><div class="tech-bar" style="background:#f97316;--w:85%;transition-delay:.8s;"></div></div>
+            <span class="tech-desc">Pattern matching core</span>
+          </div>
+        </div>
+      </div>
+      <div class="card" style="border-color:rgba(0,255,136,.15);">
+        <div class="eyebrow" style="font-size:11px;">Key Design Decision</div>
+        <p style="font-size:14px;line-height:1.7;color:var(--dim);margin-top:8px;">
+          No AST parsing — we intentionally chose regex-based pattern matching.
+          Faster, simpler, and good enough for 25 targeted anti-pattern rules.
+          <span style="color:var(--text)">The right tool for the right job.</span>
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8: CLOSING -->
+<div class="slide" id="s8">
+  <div class="inner">
+    <div class="eyebrow">Try It Now</div>
+    <h2>Paste your code.<br>Find the <span class="accent-red">problem</span><br>before it finds you.</h2>
+    <div class="stat-row">
+      <div class="stat-box">
+        <span class="num accent-green">25</span>
+        <span class="lbl">Detection Rules</span>
+      </div>
+      <div class="stat-box">
+        <span class="num accent-blue">10</span>
+        <span class="lbl">Languages</span>
+      </div>
+      <div class="stat-box">
+        <span class="num accent-amber">7</span>
+        <span class="lbl">AI Slop Patterns</span>
+      </div>
+      <div class="stat-box">
+        <span class="num" style="color:#c026d3">O(n)</span>
+        <span class="lbl">Scanner Complexity</span>
+      </div>
+    </div>
+    <div class="big-url">github.com/rishabmohandoss/code-efficiency-checker</div>
+    <p class="closing-line">
+      Built with <em>React + Vite</em>. Runs entirely in your browser.
+      <em>No signup. No backend. No data collection.</em>
+      Just fast, honest analysis.
+    </p>
+  </div>
+</div>
+
+<!-- NAV -->
+<div id="dots"></div>
+<div id="counter"></div>
+<div id="prev-zone" onclick="changeSlide(-1)"></div>
+<div id="next-zone" onclick="changeSlide(1)"></div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const dotsEl = document.getElementById('dots');
+  const counterEl = document.getElementById('counter');
+  const progressEl = document.getElementById('progress');
+  let current = 0;
+  let timer;
+  const AUTO_ADVANCE = 12000; // 12 seconds per slide
+
+  // Build dots
+  slides.forEach((_, i) => {
+    const d = document.createElement('div');
+    d.className = 'dot';
+    d.onclick = () => goTo(i);
+    dotsEl.appendChild(d);
+  });
+
+  function goTo(n) {
+    slides[current].classList.remove('active');
+    dotsEl.children[current].classList.remove('active');
+    current = (n + slides.length) % slides.length;
+    slides[current].classList.add('active');
+    dotsEl.children[current].classList.add('active');
+    counterEl.textContent = `${current + 1} / ${slides.length}`;
+    progressEl.style.width = ((current + 1) / slides.length * 100) + '%';
+    resetTimer();
+  }
+
+  function changeSlide(dir) { goTo(current + dir); }
+
+  function resetTimer() {
+    clearInterval(timer);
+    timer = setInterval(() => goTo(current + 1), AUTO_ADVANCE);
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') changeSlide(1);
+    if (e.key === 'ArrowLeft') changeSlide(-1);
+  });
+
+  goTo(0);
+</script>
+</body>
+</html>
