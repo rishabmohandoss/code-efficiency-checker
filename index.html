@@ -13,7 +13,7 @@
         z-index: -1;
       }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.1.9/p5.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/vanta@latest/dist/vanta.topology.min.js"></script>
   </head>
   <body>
@@ -21,17 +21,21 @@
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
     <script>
-      VANTA.TOPOLOGY({
-        el: "#vanta-bg",
-        mouseControls: true,
-        touchControls: true,
-        gyroControls: false,
-        minHeight: 200.00,
-        minWidth: 200.00,
-        scale: 1.00,
-        scaleMobile: 1.00,
-        color: 0x1aac,
-        backgroundColor: 0x0
+      document.addEventListener("DOMContentLoaded", function() {
+        if (window.VANTA) {
+          VANTA.TOPOLOGY({
+            el: "#vanta-bg",
+            mouseControls: true,
+            touchControls: true,
+            gyroControls: false,
+            minHeight: 200.00,
+            minWidth: 200.00,
+            scale: 1.00,
+            scaleMobile: 1.00,
+            color: 0x1aac,
+            backgroundColor: 0x0
+          });
+        }
       });
     </script>
   </body>
