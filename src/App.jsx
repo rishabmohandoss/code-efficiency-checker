@@ -1,12 +1,7 @@
-import { useState, useRef, useCallback, useEffect } from "react";
+import { useState, useRef, useCallback } from "react";
 import { jsPDF } from "jspdf";
-import p5 from "p5";
-import TOPOLOGY from "vanta/dist/vanta.topology.min";
 import { RULES } from './rules/index.js';
 
-if (typeof window !== "undefined") {
-  window.p5 = p5;
-}
 import {
   SEVERITY,
   COMPLEXITY_HIERARCHY,
@@ -174,8 +169,6 @@ function App() {
   const [analysisMode, setAnalysisMode] = useState("performance"); // "performance" or "security"
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
-  const vantaRef = useRef(null);
-  const vantaEffect = useRef(null);
 
   const handleAnalyze = useCallback(async () => {
     if (!code.trim() && method !== 'github') {
@@ -507,39 +500,6 @@ function App() {
     doc.save(filename);
   };
 
-  // Initialize Vanta.js background effect
-  useEffect(() => {
-    if (!vantaEffect.current && vantaRef.current) {
-      try {
-        vantaEffect.current = TOPOLOGY({
-          el: vantaRef.current,
-          p5: p5,
-          mouseControls: true,
-          touchControls: true,
-          gyroControls: false,
-          minHeight: 200.00,
-          minWidth: 200.00,
-          scale: 1.00,
-          scaleMobile: 1.00,
-          color: 0x16b9,
-          backgroundColor: 0x0,
-        });
-      } catch (error) {
-        console.error('Vanta.js initialization error:', error);
-      }
-    }
-    return () => {
-      if (vantaEffect.current) {
-        try {
-          vantaEffect.current.destroy();
-          vantaEffect.current = null;
-        } catch (error) {
-          console.error('Vanta.js cleanup error:', error);
-        }
-      }
-    };
-  }, []);
-
   return (
     <div style={{
       minHeight:"100vh",
@@ -547,19 +507,6 @@ function App() {
       color:"#e5e7eb",
       fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     }}>
-      {/* Vanta.js animated background */}
-      <div
-        ref={vantaRef}
-        style={{
-          position:"fixed",
-          top:0,
-          left:0,
-          width:"100vw",
-          height:"100vh",
-          zIndex:0
-        }}
-      />
-
       {/* Content */}
       <div style={{ position:"relative", zIndex:1, maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
 
