@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from "react";
+import TOPOLOGY from "vanta/dist/vanta.topology.min";
 
 import { RULES } from './rules/index.js';
 
@@ -242,11 +243,41 @@ function App() {
   const [analysisMode, setAnalysisMode] = useState("performance"); // "performance" or "security"
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
+  const vantaRef = useRef(null);
+  const vantaEffect = useRef(null);
 
   // Abort any in-flight GitHub requests if the component unmounts
   useEffect(() => {
     return () => {
       if (abortControllerRef.current) abortControllerRef.current.abort();
+    };
+  }, []);
+
+  // Vanta.js animated background
+  useEffect(() => {
+    if (!vantaEffect.current && vantaRef.current) {
+      try {
+        vantaEffect.current = TOPOLOGY({
+          el: vantaRef.current,
+          mouseControls: true,
+          touchControls: true,
+          gyroControls: false,
+          minHeight: 200.00,
+          minWidth: 200.00,
+          scale: 1.00,
+          scaleMobile: 1.00,
+          color: 0x1aac,
+          backgroundColor: 0x0,
+        });
+      } catch (e) {
+        console.error('Vanta init error:', e);
+      }
+    }
+    return () => {
+      if (vantaEffect.current) {
+        vantaEffect.current.destroy();
+        vantaEffect.current = null;
+      }
     };
   }, []);
 
@@ -593,6 +624,8 @@ function App() {
       color:"#e5e7eb",
       fontFamily:"'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
     }}>
+      {/* Vanta.js animated background */}
+      <div ref={vantaRef} style={{ position:"fixed", top:0, left:0, width:"100vw", height:"100vh", zIndex:0 }} />
       {/* Content */}
       <div style={{ position:"relative", zIndex:1, maxWidth:1200, margin:"0 auto", padding:"40px 24px" }}>
 
@@ -901,7 +934,7 @@ function App() {
                     }
                   }}
                 >
-                  ⚡ Performance
+                  Performance
                 </button>
                 <button
                   onClick={() => setAnalysisMode("security")}
@@ -929,7 +962,7 @@ function App() {
                     }
                   }}
                 >
-                  🛡️ Security
+                  Security
                 </button>
               </div>
               <p style={{
@@ -1062,7 +1095,7 @@ function App() {
                         fontSize:36,
                         lineHeight:1
                       }}>
-                        {result.data.deploymentReady ? "✅" : "⚠️"}
+                        {result.data.deploymentReady ? "OK" : "!"}
                       </div>
                       <div style={{ flex:1 }}>
                         <div style={{ fontSize:18, fontWeight:600, color:"#ffffff", marginBottom:4 }}>
@@ -1555,10 +1588,10 @@ function App() {
                                 {result.analysisMode === "security" ? (
                                   <>
                                     <span style={{ color: fileResult.analysis.stats.critical > 0 ? "#ef4444" : "#6b7280" }}>
-                                      {fileResult.analysis.stats.critical > 0 ? "🔴" : "—"} {fileResult.analysis.stats.critical} critical
+                                      {fileResult.analysis.stats.critical} critical
                                     </span>
                                     <span style={{ color: fileResult.analysis.stats.high > 0 ? "#f97316" : "#6b7280" }}>
-                                      {fileResult.analysis.stats.high > 0 ? "🟠" : "—"} {fileResult.analysis.stats.high} high
+                                      {fileResult.analysis.stats.high} high
                                     </span>
                                     <span style={{ color:"#9ca3af" }}>
                                       Score: {fileResult.analysis.securityScore || 0}/100

@@ -14,6 +14,8 @@
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
     "jspdf": "^4.2.1",
+    "three": "^0.160.0",
+    "vanta": "^0.5.24",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tailwindcss": "^4.2.2",
