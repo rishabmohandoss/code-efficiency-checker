@@ -78,7 +78,10 @@ export const detectIndentSize = (lines) => {
   // Find most common indent size
   const counts = {};
   indents.forEach(i => counts[i] = (counts[i] || 0) + 1);
-  return parseInt(Object.keys(counts).reduce((a, b) => counts[a] > counts[b] ? a : b, 2));
+  // No initial value: the previous `, 2` seed made the first comparison
+  // counts[2] vs counts[b], where counts[2] is usually undefined, so the
+  // seed always lost and could skew ties. keys is guaranteed non-empty here.
+  return parseInt(Object.keys(counts).reduce((a, b) => counts[a] >= counts[b] ? a : b), 10);
 };
 
 /**

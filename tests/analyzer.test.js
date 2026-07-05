@@ -1,9 +1,11 @@
 /**
- * Test Suite for Code Efficiency Checker
- * Tests the core analysis engine and all rules
+ * Test Suite for Code Efficiency Checker (Vitest)
+ * Run: npm test
  */
+import { describe, test, expect } from 'vitest';
+import { runAnalysis } from '../src/analysis/engine.js';
+import { runSecurityAnalysis } from '../src/analysis/security-engine.js';
 
-// Test samples with known issues
 const testCases = {
   nestedLoops: {
     code: `function findDuplicates(arr) {
@@ -199,28 +201,39 @@ for item in items:
   }
 };
 
-// Manual test runner (since no test framework is installed yet)
-console.log("=".repeat(80));
-console.log("CODE EFFICIENCY CHECKER - TEST SUITE");
-console.log("=".repeat(80));
-
-// Note: To run these tests, you need to:
-// 1. Import the runAnalysis function from App.jsx
-// 2. Set up a proper test runner (e.g., Vitest)
-// 3. Run: npm test
-
-console.log("\nTest cases defined:");
-Object.keys(testCases).forEach(testName => {
-  const test = testCases[testName];
-  console.log(`  - ${testName}: expects ${test.expectedFlags.length} flag(s)`);
+describe('performance rule engine', () => {
+  Object.entries(testCases).forEach(([name, tc]) => {
+    test(name, () => {
+      const result = runAnalysis(tc.code, tc.language);
+      const firedIds = result.flags.map(f => f.id);
+      tc.expectedFlags.forEach(id => {
+        expect(firedIds, `expected rule "${id}" to fire`).toContain(id);
+      });
+      if (tc.expectedFlags.length === 0) {
+        expect(firedIds).toEqual([]);
+      }
+    });
+  });
 });
 
-console.log("\n" + "=".repeat(80));
-console.log("To run these tests:");
-console.log("1. Install Vitest: npm install -D vitest");
-console.log("2. Add to package.json scripts: \"test\": \"vitest\"");
-console.log("3. Convert this file to use Vitest's test() and expect()");
-console.log("4. Run: npm test");
-console.log("=".repeat(80));
+describe('security engine regressions', () => {
+  test('flags every occurrence of a repeated secret (stateful /g regex bug)', () => {
+    // Before the safeTest fix, reused /g regexes carried lastIndex across
+    // lines and silently skipped every other identical match.
+    const code = 'password = "hunter2"\npassword = "hunter2"\npassword = "hunter2"';
+    const result = runSecurityAnalysis(code, 'javascript');
+    expect(result.stats.critical).toBe(3);
+  });
 
-export { testCases };
+  test('detects an AWS access key', () => {
+    const code = 'const key = "AKIAIOSFODNN7EXAMPLE";';
+    const result = runSecurityAnalysis(code, 'javascript');
+    expect(result.allIssues.some(i => i.id === 'hardcoded-api-key')).toBe(true);
+  });
+
+  test('clean code produces no critical issues', () => {
+    const code = 'const key = process.env.API_KEY;\nconsole.log("ok");';
+    const result = runSecurityAnalysis(code, 'javascript');
+    expect(result.stats.critical).toBe(0);
+  });
+});

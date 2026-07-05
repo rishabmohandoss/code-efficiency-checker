@@ -11,6 +11,18 @@ const SEVERITY = {
   LOW: 'LOW'
 };
 
+/**
+ * Safely test a regex against a string.
+ * Regexes with the /g or /y flag are stateful: .test() advances lastIndex,
+ * so reusing the same pattern object across lines silently skips matches
+ * (every other identical line would return false). Resetting lastIndex
+ * before each test makes reused patterns behave correctly.
+ */
+function safeTest(pattern, str) {
+  pattern.lastIndex = 0;
+  return pattern.test(str);
+}
+
 // Helper to create security issue
 function createIssue(id, severity, title, message, hint, line = null, category = 'Security') {
   return {
@@ -146,7 +158,7 @@ function detectSecrets(code, lines, results, language) {
     }
 
     passwordPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'hardcoded-password',
           SEVERITY.CRITICAL,
@@ -169,7 +181,7 @@ function detectSecrets(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     dbConnectionPatterns.forEach(pattern => {
-      if (pattern.test(line) && !line.includes('process.env') && !line.includes('example')) {
+      if (safeTest(pattern, line) && !line.includes('process.env') && !line.includes('example')) {
         const issue = createIssue(
           'hardcoded-db-connection',
           SEVERITY.CRITICAL,
@@ -196,7 +208,7 @@ function detectSecrets(code, lines, results, language) {
     }
 
     jwtSecretPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'hardcoded-jwt-secret',
           SEVERITY.CRITICAL,
@@ -222,7 +234,7 @@ function detectSecrets(code, lines, results, language) {
     }
 
     oauthPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'hardcoded-oauth-secret',
           SEVERITY.CRITICAL,
@@ -264,7 +276,7 @@ function detectSecrets(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     cloudPatterns.forEach(({ pattern, name, id }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           id,
           SEVERITY.CRITICAL,
@@ -304,7 +316,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     sqlInjectionPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         // Skip if using parameterized queries (has ? or $1, $2 placeholders)
         if (line.includes('?') || /\$\d+/.test(line)) {
           return;
@@ -335,7 +347,7 @@ function detectOWASP(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       noSqlPatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const issue = createIssue(
             'nosql-injection',
             SEVERITY.CRITICAL,
@@ -363,7 +375,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     xssPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'xss-vulnerability',
           SEVERITY.CRITICAL,
@@ -389,7 +401,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     commandInjectionPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'command-injection',
           SEVERITY.CRITICAL,
@@ -414,7 +426,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     pathTraversalPatterns.forEach(pattern => {
-      if (pattern.test(line) && !line.includes('path.resolve') && !line.includes('path.join')) {
+      if (safeTest(pattern, line) && !line.includes('path.resolve') && !line.includes('path.join')) {
         const issue = createIssue(
           'path-traversal',
           SEVERITY.CRITICAL,
@@ -440,7 +452,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     deserializationPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         // Skip safe patterns
         if (line.includes('yaml.safe_load')) {
           return;
@@ -468,7 +480,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     ssrfPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'ssrf-vulnerability',
           SEVERITY.HIGH,
@@ -492,7 +504,7 @@ function detectOWASP(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     redirectPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'open-redirect',
           SEVERITY.MEDIUM,
@@ -518,7 +530,7 @@ function detectOWASP(code, lines, results, language) {
     const context = lines.slice(Math.max(0, index - 2), Math.min(lines.length, index + 3)).join('\n');
 
     idorPatterns.forEach(pattern => {
-      if (pattern.test(line) && !context.includes('user') && !context.includes('auth') && !context.includes('owner')) {
+      if (safeTest(pattern, line) && !context.includes('user') && !context.includes('auth') && !context.includes('owner')) {
         const issue = createIssue(
           'idor-vulnerability',
           SEVERITY.HIGH,
@@ -563,7 +575,7 @@ function detectAuthIssues(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       routePatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           // Check if auth middleware is present in the same line or next few lines
           const context = lines.slice(index, Math.min(lines.length, index + 2)).join('\n');
           if (!context.includes('auth') && !context.includes('verify') && !context.includes('protect')) {
@@ -591,7 +603,7 @@ function detectAuthIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     weakPasswordPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'weak-password-policy',
           SEVERITY.HIGH,
@@ -616,7 +628,7 @@ function detectAuthIssues(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       loginPatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const context = lines.slice(Math.max(0, index - 5), Math.min(lines.length, index + 2)).join('\n');
           if (!context.includes('rateLimit') && !context.includes('limiter')) {
             const issue = createIssue(
@@ -643,7 +655,7 @@ function detectAuthIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     sessionPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const context = lines.slice(Math.max(0, index - 3), Math.min(lines.length, index + 3)).join('\n');
         if (!context.includes('regenerate') && !context.includes('destroy')) {
           const issue = createIssue(
@@ -671,7 +683,7 @@ function detectAuthIssues(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       localStoragePatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const issue = createIssue(
             'insecure-token-storage',
             SEVERITY.HIGH,
@@ -700,7 +712,7 @@ function detectAuthIssues(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       stateChangingPatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const context = lines.slice(Math.max(0, index - 10), Math.min(lines.length, index + 2)).join('\n');
           if (!context.includes('csrf') && !context.includes('SameSite') && !context.match(/app\.use\(.*csrf/)) {
             const issue = createIssue(
@@ -728,7 +740,7 @@ function detectAuthIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     privilegePatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'privilege-escalation',
           SEVERITY.CRITICAL,
@@ -777,7 +789,7 @@ function detectDataProtection(code, lines, results, language) {
     }
 
     plaintextPasswordPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'plaintext-password',
           SEVERITY.CRITICAL,
@@ -801,7 +813,7 @@ function detectDataProtection(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     weakHashPatterns.forEach(pattern => {
-      if (pattern.test(line) && (line.toLowerCase().includes('password') || line.toLowerCase().includes('pass'))) {
+      if (safeTest(pattern, line) && (line.toLowerCase().includes('password') || line.toLowerCase().includes('pass'))) {
         const issue = createIssue(
           'weak-hashing',
           SEVERITY.HIGH,
@@ -824,7 +836,7 @@ function detectDataProtection(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     httpPatterns.forEach(pattern => {
-      if (pattern.test(line) && !line.includes('example')) {
+      if (safeTest(pattern, line) && !line.includes('example')) {
         const issue = createIssue(
           'missing-https',
           SEVERITY.CRITICAL,
@@ -848,7 +860,7 @@ function detectDataProtection(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     corsPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const context = lines.slice(Math.max(0, index - 2), Math.min(lines.length, index + 2)).join('\n');
         if (context.includes('credentials') || context.includes('cookie')) {
           const issue = createIssue(
@@ -975,7 +987,7 @@ function detectEnvironmentVariables(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     unsafeEnvPatterns.forEach(pattern => {
-      if (pattern.test(line) && !line.includes('||') && !line.includes('??') && !line.includes('if')) {
+      if (safeTest(pattern, line) && !line.includes('||') && !line.includes('??') && !line.includes('if')) {
         const issue = createIssue(
           'unsafe-env-access',
           SEVERITY.MEDIUM,
@@ -1044,7 +1056,7 @@ function detectEnvironmentVariables(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     insecureVarNames.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'insecure-env-names',
           SEVERITY.LOW,
@@ -1093,7 +1105,7 @@ function detectConfigurationIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     debugPatterns.forEach(pattern => {
-      if (pattern.test(line) && !line.includes('if') && !line.includes('//')) {
+      if (safeTest(pattern, line) && !line.includes('if') && !line.includes('//')) {
         const issue = createIssue(
           'debug-mode-production',
           SEVERITY.HIGH,
@@ -1117,7 +1129,7 @@ function detectConfigurationIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     defaultCredPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'default-credentials',
           SEVERITY.CRITICAL,
@@ -1143,7 +1155,7 @@ function detectConfigurationIssues(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       adminRoutePatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const context = lines.slice(Math.max(0, index - 2), Math.min(lines.length, index + 3)).join('\n');
           if (!context.includes('auth') &&
               !context.includes('protect') &&
@@ -1176,7 +1188,7 @@ function detectConfigurationIssues(code, lines, results, language) {
 
     lines.forEach((line, index) => {
       staticServePatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const context = lines.slice(index, Math.min(lines.length, index + 3)).join('\n');
           if (!context.includes('index:') && !context.includes('index.html')) {
             const issue = createIssue(
@@ -1204,7 +1216,7 @@ function detectConfigurationIssues(code, lines, results, language) {
     /upload\./gi
   ];
 
-  const hasFileUpload = fileUploadPatterns.some(pattern => pattern.test(code));
+  const hasFileUpload = fileUploadPatterns.some(pattern => safeTest(pattern, code));
 
   if (hasFileUpload) {
     const hasValidation = /\.mimetype/gi.test(code) ||
@@ -1259,7 +1271,7 @@ function detectConfigurationIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     cookiePatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const context = lines.slice(index, Math.min(lines.length, index + 5)).join('\n');
 
         const hasHttpOnly = /httpOnly\s*:\s*true/gi.test(context);
@@ -1329,7 +1341,7 @@ function detectDependencyIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     knownOutdatedPatterns.forEach(({ pattern, name, reason }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'outdated-dependency',
           SEVERITY.HIGH,
@@ -1349,7 +1361,7 @@ function detectDependencyIssues(code, lines, results, language) {
     // Detect very old major versions (0.x, 1.x for commonly updated packages)
     const oldVersionPattern = /["'][^"']+["']:\s*["']\^?0\.[0-9]+\.[0-9]+["']/gi;
     lines.forEach((line, index) => {
-      if (oldVersionPattern.test(line) && !line.includes('//')) {
+      if (safeTest(oldVersionPattern, line) && !line.includes('//')) {
         const packageMatch = line.match(/["']([^"']+)["']:\s*["']\^?0\./);
         if (packageMatch) {
           const packageName = packageMatch[1];
@@ -1383,7 +1395,7 @@ function detectDependencyIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     suspiciousPatterns.forEach(({ pattern, name, reason }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'malicious-dependency',
           SEVERITY.CRITICAL,
@@ -1573,7 +1585,7 @@ function detectCICDIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     secretLoggingPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         // Skip if it's a comment or explicitly masked
         if (line.trim().startsWith('#') || line.trim().startsWith('//') || line.includes('***')) {
           return;
@@ -1603,7 +1615,7 @@ function detectCICDIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     dangerousCommandPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'secrets-in-command-args',
           SEVERITY.HIGH,
@@ -1636,7 +1648,7 @@ function detectCICDIssues(code, lines, results, language) {
       }
 
       unsafeInstallPatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const issue = createIssue(
             'unverified-dependencies-ci',
             SEVERITY.HIGH,
@@ -1662,7 +1674,7 @@ function detectCICDIssues(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     remoteScriptPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'remote-script-execution',
           SEVERITY.HIGH,
@@ -1725,7 +1737,7 @@ function detectCICDIssues(code, lines, results, language) {
   if (isCIConfig && code.includes('GITHUB_TOKEN')) {
     lines.forEach((line, index) => {
       broadPermissionPatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           const issue = createIssue(
             'overly-permissive-ci-token',
             SEVERITY.HIGH,
@@ -1827,7 +1839,7 @@ function detectCodeQualityPerformance(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     blockingOperations.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         // Skip if it's in a comment
         if (line.trim().startsWith('//') || line.trim().startsWith('*') || line.trim().startsWith('#')) {
           return;
@@ -1904,7 +1916,7 @@ function detectCodeQualityPerformance(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     globalAccumulationPatterns.forEach(pattern => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         if (line.trim().startsWith('//') || line.trim().startsWith('*')) {
           return;
         }
@@ -1943,12 +1955,12 @@ function detectCodeQualityPerformance(code, lines, results, language) {
   ];
 
   lines.forEach((line, index) => {
-    const hasLoop = loopPatterns.some(pattern => pattern.test(line));
+    const hasLoop = loopPatterns.some(pattern => safeTest(pattern, line));
 
     // Check next few lines for database queries inside loops
     if (hasLoop && index < lines.length - 5) {
       const nextLines = lines.slice(index + 1, index + 6).join('\n');
-      const hasQuery = databaseQueryPatterns.some(pattern => pattern.test(nextLines));
+      const hasQuery = databaseQueryPatterns.some(pattern => safeTest(pattern, nextLines));
 
       if (hasQuery) {
         const issue = createIssue(
@@ -1974,11 +1986,11 @@ function detectCodeQualityPerformance(code, lines, results, language) {
   ];
 
   lines.forEach((line, index) => {
-    const hasLoop = loopPatterns.some(pattern => pattern.test(line));
+    const hasLoop = loopPatterns.some(pattern => safeTest(pattern, line));
 
     if (hasLoop && index < lines.length - 5) {
       const nextLines = lines.slice(index + 1, index + 6).join('\n');
-      const hasAPICall = apiCallPatterns.some(pattern => pattern.test(nextLines));
+      const hasAPICall = apiCallPatterns.some(pattern => safeTest(pattern, nextLines));
 
       if (hasAPICall) {
         const issue = createIssue(
@@ -2052,7 +2064,7 @@ function detectCodeQualityPerformance(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     bundleSizeAntiPatterns.forEach(({ pattern, name, fix }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'large-bundle-import',
           SEVERITY.LOW,
@@ -2092,7 +2104,7 @@ function detectCodeQualityPerformance(code, lines, results, language) {
       }
 
       consolePatterns.forEach(pattern => {
-        if (pattern.test(line)) {
+        if (safeTest(pattern, line)) {
           consoleCount++;
 
           // Only report first few instances
@@ -2149,7 +2161,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     cloudCredentialPatterns.forEach(({ pattern, name, service }) => {
-      if (pattern.test(line) && !line.trim().startsWith('//') && !line.trim().startsWith('#')) {
+      if (safeTest(pattern, line) && !line.trim().startsWith('//') && !line.trim().startsWith('#')) {
         const issue = createIssue(
           'exposed-cloud-credentials',
           SEVERITY.CRITICAL,
@@ -2177,7 +2189,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     permissiveIAMPatterns.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'overly-permissive-iam',
           SEVERITY.HIGH,
@@ -2204,7 +2216,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     unencryptedStoragePatterns.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'unencrypted-cloud-storage',
           SEVERITY.HIGH,
@@ -2229,7 +2241,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     missingFirewallPatterns.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'overly-permissive-firewall',
           SEVERITY.MEDIUM,
@@ -2255,7 +2267,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     containerRootPatterns.forEach(({ pattern, name }) => {
-      if (pattern.test(line) && !line.includes('runAsNonRoot')) {
+      if (safeTest(pattern, line) && !line.includes('runAsNonRoot')) {
         const issue = createIssue(
           'container-running-as-root',
           SEVERITY.MEDIUM,
@@ -2280,7 +2292,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     exposedDockerPatterns.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'exposed-docker-daemon',
           SEVERITY.CRITICAL,
@@ -2323,7 +2335,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     k8sInsecurePatterns.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'insecure-kubernetes-config',
           SEVERITY.HIGH,
@@ -2416,7 +2428,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
 
   lines.forEach((line, index) => {
     corsMisconfigurations.forEach(({ pattern, name }) => {
-      if (pattern.test(line)) {
+      if (safeTest(pattern, line)) {
         const issue = createIssue(
           'cors-misconfiguration',
           SEVERITY.MEDIUM,
@@ -2448,7 +2460,7 @@ function detectInfrastructureCloudSecurity(code, lines, results, language) {
     lines.forEach((line, index) => {
       iacSecretPatterns.forEach(({ pattern, name }) => {
         // Skip if it's using a variable reference
-        if (pattern.test(line) && !line.includes('var.') && !line.includes('${') &&
+        if (safeTest(pattern, line) && !line.includes('var.') && !line.includes('${') &&
             !line.trim().startsWith('#') && !line.trim().startsWith('//')) {
           const issue = createIssue(
             'iac-hardcoded-secrets',

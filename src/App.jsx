@@ -1,5 +1,5 @@
-import { useState, useRef, useCallback } from "react";
-import { jsPDF } from "jspdf";
+import { useState, useRef, useCallback, useEffect } from "react";
+
 import { RULES } from './rules/index.js';
 
 import {
@@ -60,37 +60,108 @@ const SEVERITY_COLORS = {
 
 // Parse GitHub URL to extract owner, repo, branch, path
 function parseGitHubUrl(url) {
-  const match = url.match(/github\.com\/([^\/]+)\/([^\/]+)(?:\/(?:blob|tree)\/([^\/]+)(?:\/(.+))?)?/);
+  // Strip query strings, hash fragments, and trailing slashes before parsing
+  const cleaned = url.trim().split(/[?#]/)[0].replace(/\/+$/, "");
+  const match = cleaned.match(/github\.com\/([^\/]+)\/([^\/]+)(?:\/(?:blob|tree)\/([^\/]+)(?:\/(.+))?)?/);
   if (!match) return null;
 
-  const [, owner, repo, branch = "main", path] = match;
+  let [, owner, repo, branch, path] = match;
+  repo = repo.replace(/\.git$/, ""); // handle clone-style URLs
   const isRepoUrl = !path || path.trim() === "";
 
-  return { owner, repo, branch, path, isRepoUrl };
+  // branch is null when not present in the URL; the real default branch
+  // (main, master, etc.) is resolved via the API instead of assuming "main"
+  return { owner, repo, branch: branch || null, path, isRepoUrl };
 }
 
-// Fetch content of a single file from GitHub
-async function fetchGitHubFile(info, signal) {
-  const { owner, repo, path, branch } = info;
-  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
+// Decode base64 as UTF-8 (bare atob() mangles any non-ASCII source code)
+function decodeBase64Utf8(b64) {
+  const binary = atob(b64.replace(/\s/g, ""));
+  const bytes = Uint8Array.from(binary, ch => ch.charCodeAt(0));
+  return new TextDecoder("utf-8").decode(bytes);
+}
 
-  const res = await fetch(apiUrl, { signal });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+// fetch() with a timeout layered on top of the caller's abort signal
+async function fetchWithTimeout(url, signal, timeoutMs = GITHUB_TIMEOUT) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", onAbort, { once: true });
+  }
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } catch (err) {
+    // Distinguish caller-cancel from timeout so the UI message is accurate
+    if (err.name === "AbortError" && !(signal && signal.aborted)) {
+      throw new Error(`Request timed out after ${timeoutMs / 1000}s`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    if (signal) signal.removeEventListener("abort", onAbort);
+  }
+}
+
+// Turn GitHub API failures into actionable error messages
+function githubApiError(res) {
+  if ((res.status === 403 || res.status === 429) && res.headers.get("x-ratelimit-remaining") === "0") {
+    const reset = res.headers.get("x-ratelimit-reset");
+    const when = reset ? new Date(Number(reset) * 1000).toLocaleTimeString() : "later";
+    return new Error(`GitHub API rate limit reached (60 requests/hour for unauthenticated use). Try again after ${when}.`);
+  }
+  if (res.status === 404) {
+    return new Error("Repository, branch, or file not found. Check the URL (private repos are not supported).");
+  }
+  return new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+}
+
+// Resolve the repo's actual default branch when the URL doesn't specify one
+async function resolveBranch(info, signal) {
+  if (info.branch) return info.branch;
+  const res = await fetchWithTimeout(`https://api.github.com/repos/${info.owner}/${info.repo}`, signal);
+  if (!res.ok) throw githubApiError(res);
+  const data = await res.json();
+  return data.default_branch || "main";
+}
+
+// Fetch content of a single file from GitHub.
+// Uses raw.githubusercontent.com first (no API rate limit, no base64),
+// falling back to the contents API if that fails.
+async function fetchGitHubFile(info, signal) {
+  const { owner, repo, path } = info;
+  const branch = await resolveBranch(info, signal);
+
+  const rawUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodeURIComponent(branch)}/${path}`;
+  try {
+    const rawRes = await fetchWithTimeout(rawUrl, signal);
+    if (rawRes.ok) return await rawRes.text();
+  } catch (err) {
+    if (err.name === "AbortError") throw err;
+    // fall through to the API
+  }
+
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${encodeURIComponent(branch)}`;
+  const res = await fetchWithTimeout(apiUrl, signal);
+  if (!res.ok) throw githubApiError(res);
 
   const data = await res.json();
-  if (data.encoding === "base64") {
-    return atob(data.content.replace(/\n/g, ""));
+  if (data.encoding === "base64" && data.content) {
+    return decodeBase64Utf8(data.content);
   }
-  throw new Error("Unexpected encoding from GitHub API");
+  // The contents API omits content for files over 1MB
+  throw new Error("File is too large or has an unexpected encoding");
 }
 
 // Fetch repository tree (all files)
 async function fetchGitHubRepoTree(info, signal) {
-  const { owner, repo, branch } = info;
-  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${branch}?recursive=1`;
+  const { owner, repo } = info;
+  const branch = await resolveBranch(info, signal);
+  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
 
-  const res = await fetch(apiUrl, { signal });
-  if (!res.ok) throw new Error(`GitHub API error: ${res.status} ${res.statusText}`);
+  const res = await fetchWithTimeout(apiUrl, signal, GITHUB_REPO_TIMEOUT);
+  if (!res.ok) throw githubApiError(res);
 
   const data = await res.json();
 
@@ -101,55 +172,57 @@ async function fetchGitHubRepoTree(info, signal) {
   const codeFiles = data.tree
     .filter(item => {
       if (item.type !== 'blob') return false;
+      if (typeof item.size === 'number' && item.size > MAX_GITHUB_FILE_SIZE) return false;
       if (ignoredPaths.some(p => item.path.includes(p))) return false;
       const ext = item.path.split('.').pop().toLowerCase();
       return codeExtensions.includes(ext);
     })
     .slice(0, MAX_REPO_FILES);
 
-  return { files: codeFiles, branch };
+  return { files: codeFiles, branch, truncated: Boolean(data.truncated) };
 }
 
-// Analyze entire repository
+// Analyze entire repository (files fetched from raw.githubusercontent.com
+// in small parallel batches — avoids burning the 60/hr API quota on content)
 async function analyzeGitHubRepository(info, onProgress, signal, analysisMode = "performance") {
-  const { files, branch } = await fetchGitHubRepoTree(info, signal);
-  const results = [];
+  const { files, branch, truncated } = await fetchGitHubRepoTree(info, signal);
+  const results = new Array(files.length);
+  const BATCH_SIZE = 5;
+  let completed = 0;
 
-  for (let i = 0; i < files.length; i++) {
-    const file = files[i];
-    onProgress && onProgress({ current: i + 1, total: files.length, file: file.path });
-
+  const analyzeOne = async (file, index) => {
     try {
-      const fileInfo = { ...info, path: file.path, branch };
-      const content = await fetchGitHubFile(fileInfo, signal);
+      const rawUrl = `https://raw.githubusercontent.com/${info.owner}/${info.repo}/${encodeURIComponent(branch)}/${file.path}`;
+      const res = await fetchWithTimeout(rawUrl, signal);
+      if (!res.ok) throw new Error(`Failed to fetch (${res.status})`);
+      const content = await res.text();
+
       const ext = file.path.split('.').pop().toLowerCase();
       const language = EXT_LANG[ext] || 'javascript';
 
-      // Run either performance or security analysis
       const analysis = analysisMode === "security"
         ? runSecurityAnalysis(content, language)
         : runAnalysis(content, language);
 
-      results.push({
-        path: file.path,
-        language,
-        analysis,
-        size: file.size
-      });
-
-      // Rate limiting: small delay between requests
-      await new Promise(resolve => setTimeout(resolve, 100));
+      results[index] = { path: file.path, language, analysis, size: file.size };
     } catch (err) {
-      results.push({
-        path: file.path,
-        error: err.message
-      });
+      if (err.name === "AbortError") throw err;
+      results[index] = { path: file.path, error: err.message };
+    } finally {
+      completed++;
+      onProgress && onProgress({ current: completed, total: files.length, file: file.path });
     }
+  };
+
+  for (let i = 0; i < files.length; i += BATCH_SIZE) {
+    const batch = files.slice(i, i + BATCH_SIZE).map((file, j) => analyzeOne(file, i + j));
+    await Promise.all(batch);
   }
 
   return {
     repoName: `${info.owner}/${info.repo}`,
-    results
+    results,
+    truncated
   };
 }
 
@@ -170,6 +243,13 @@ function App() {
   const fileInputRef = useRef(null);
   const abortControllerRef = useRef(null);
 
+  // Abort any in-flight GitHub requests if the component unmounts
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) abortControllerRef.current.abort();
+    };
+  }, []);
+
   const handleAnalyze = useCallback(async () => {
     if (!code.trim() && method !== 'github') {
       setError("Please provide some code to analyze");
@@ -186,18 +266,19 @@ function App() {
     setResult(null);
     setRepoProgress(null);
 
+    // Cancel any in-flight analysis before starting a new one
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    const signal = abortControllerRef.current.signal;
+
     try {
       let analysisResult;
       let sourceCode = code;
+      let effectiveLanguage = language;
 
       if (method === 'github') {
-        if (abortControllerRef.current) {
-          abortControllerRef.current.abort();
-        }
-
-        abortControllerRef.current = new AbortController();
-        const signal = abortControllerRef.current.signal;
-
         const info = parseGitHubUrl(githubUrl);
         if (!info) {
           throw new Error("Invalid GitHub URL format");
@@ -221,16 +302,19 @@ function App() {
         } else {
           sourceCode = await fetchGitHubFile(info, signal);
           const ext = info.path.split('.').pop().toLowerCase();
-          const detectedLang = EXT_LANG[ext] || 'javascript';
-          setLanguage(detectedLang);
+          // Use the detected language for THIS analysis. setLanguage() alone
+          // isn't enough — state updates don't apply until the next render,
+          // so the old code analyzed with whatever language was previously selected.
+          effectiveLanguage = EXT_LANG[ext] || 'javascript';
+          setLanguage(effectiveLanguage);
         }
       }
 
       // Run either performance or security analysis based on mode
       if (analysisMode === "security") {
-        analysisResult = runSecurityAnalysis(sourceCode, language);
+        analysisResult = runSecurityAnalysis(sourceCode, effectiveLanguage);
       } else {
-        analysisResult = runAnalysis(sourceCode, language);
+        analysisResult = runAnalysis(sourceCode, effectiveLanguage);
       }
 
       setResult({
@@ -277,9 +361,11 @@ function App() {
     reader.readAsText(file);
   };
 
-  const handleExportPDF = () => {
+  const handleExportPDF = async () => {
     if (!result || !result.data) return;
 
+    // Lazy-load jsPDF (~250KB) only when the user actually exports
+    const { jsPDF } = await import("jspdf");
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
     const pageHeight = doc.internal.pageSize.getHeight();

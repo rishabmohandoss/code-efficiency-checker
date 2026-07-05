@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "echo \"Tests are defined in tests/analyzer.test.js. Install vitest to run them: npm install -D vitest\" && exit 0"
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:accuracy": "node tests/accuracy.js"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
-    "jspdf": "^2.5.2",
+    "jspdf": "^4.2.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "tailwindcss": "^4.2.2",
@@ -19,6 +21,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.2.1",
-    "vite": "^7.3.1"
+    "vite": "^7.3.1",
+    "vitest": "^4.1.9"
   }
 }

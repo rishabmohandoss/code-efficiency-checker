@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-package-lock.json
+# NOTE: package-lock.json is intentionally committed for reproducible builds
 
 # Build outputs
 dist/
@@ -39,3 +39,6 @@ coverage/
 *.tmp
 *.temp
 .cache/
+
+# Local Claude Code settings (machine-specific permissions)
+.claude/settings.local.json
