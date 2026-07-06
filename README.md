@@ -2,7 +2,7 @@
 
 A client-side static analysis tool that scans code for performance anti-patterns and algorithmic inefficiencies. Built with React + Vite, runs entirely in the browser with zero backend dependencies.
 
-Link to website: [https://code-efficiency-checker-flame.vercel.app/](https://vibe-code-checker-psi.vercel.app/)
+Link to website: https://code-efficiency-checker-flame.vercel.app/
 
 ## Features
 
